@@ -4,7 +4,7 @@ When software spends a person's money at a merchant, record what they authorised
 
 This repository is **the infrastructure layer only**. It contains no product, no merchant integration and no app. Products built on the layer live in their own repositories.
 
-**Status (9 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Zero code; the build plan and the Phase 1 model spec come next.
+**Status (9 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Zero code. Build plan and model spec (`19`) drafted 9 Oct, awaiting review; Phase 1 code next.
 
 ---
 
@@ -15,7 +15,9 @@ governed-agent-payments/
 ├── specs/            the infrastructure: no merchant, device, product, amount or country values
 │   ├── README.md     four layers, parties, scope, 28 invariants
 │   ├── 01_authority.md … 07_identity_and_keys.md
+│   ├── 19_model_spec.md        exact fields, canonical form, chains, storage (code is written against it)
 │   └── policy_parameters.md   every configurable value (no defaults baked in)
+├── plan/             build_plan.md: phases 1 to 9, infrastructure only
 ├── jurisdictions/    layer 3: country law, rails and schemes, read as mapping data (India, UK)
 └── research/         18 silence and approval rules (India), 21 NPCI UAP, 23 AP2 / ACP / UK consent review
 ```

@@ -88,6 +88,7 @@ The only trade-offs made in this folder are **structural** (determinism over fle
 | `05_reconciliation.md` | Did what was decided actually happen? | Reviewed 9 Oct |
 | `06_evidence.md` | Who is right in a dispute? | Reviewed 9 Oct |
 | `07_identity_and_keys.md` | Who signed this, and can they be trusted? | Approved 9 Oct |
+| `19_model_spec.md` | Exact fields, types, canonical form, chains and storage for everything above | Drafted 9 Oct, awaiting review |
 | `policy_parameters.md` | Every configurable value | Maintained with each spec |
 
 Background: `../research/23_external_protocols_review.md` (AP2 v0.2, ACP). Jurisdiction-specific material (layer 3) is in `../jurisdictions/`.
