@@ -4,7 +4,7 @@ When software spends a person's money at a merchant, record what they authorised
 
 This repository is **the infrastructure layer only**. It contains no product, no merchant integration and no app. Products built on the layer live in their own repositories.
 
-**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phase 1 (primitives) built 12 Oct; Phase 2 (the evaluator) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
+**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 (primitives) and 2 (the evaluator) built 12 Oct; Phase 3 (jurisdiction mappings) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
 
 ---
 
@@ -44,9 +44,10 @@ Requires [uv](https://docs.astral.sh/uv/).
 uv sync            # install the workspace
 make test          # all tests
 make demo-phase1   # sign a chain, tamper with it, see verification fail
+make evaluate      # the evaluator on six situations
 ```
 
 | Package | Contents |
 |---|---|
-| `packages/core` (`gap_core`) | Pure: Money, canonical JSON (RFC 8785), hashing, IDs, timestamps, injected clock, ES256 verification, hash chains. No I/O, no clock reads (enforced by `test_purity.py`) |
+| `packages/core` (`gap_core`) | Pure: Money, canonical JSON (RFC 8785), hashing, IDs, timestamps, injected clock, ES256 verification, hash chains, and `evaluate()` with the 14 rule dimensions. No I/O, no clock reads (enforced by `test_purity.py`) |
 | `packages/keys` (`gap_keys`) | Signers: a local software signer for development and tests |

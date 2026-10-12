@@ -242,7 +242,17 @@ ProposalProof {
 
 ### 4.2 System clauses
 Failing clauses not written by an operator or payer use `author = system` and these `rule_id`s:
-`sys.no_spoke`, `sys.spoke_inactive`, `sys.spoke_expired`, `sys.caller_not_bound`, `sys.caller_assurance`, `sys.proof_invalid`, `sys.proof_stale`, `sys.nonce_reused`, `sys.unmodelled_attribute`, `sys.intent_conflict`, `sys.cap_exceeded`, `sys.budget_exceeded`, `sys.open_finding`, `sys.recovery_pending`, `sys.drift`.
+`sys.no_spoke`, `sys.spoke_inactive`, `sys.spoke_expired`, `sys.caller_not_bound`, `sys.caller_assurance`, `sys.proof_invalid`, `sys.proof_stale`, `sys.nonce_reused`, `sys.unmodelled_attribute`, `sys.intent_conflict`, `sys.cap_exceeded`, `sys.budget_exceeded`, `sys.open_finding`, `sys.recovery_pending`, `sys.drift`, `sys.no_rail` (no live permitted rail), `sys.usage_unknown` (a usage figure the evaluator needs was not supplied; never assumed zero).
+
+**Evaluation semantics fixed while building Phase 2 (12 Oct):**
+- **Validity:** `valid_from ≤ at < valid_until` (the end is exclusive).
+- **Time spans:** `from` inclusive, `to` exclusive, in the span's time zone; a span with `from > to` crosses midnight.
+- **`substitution.mode = none`** passes only when the proposal states `substitution.allowed = false`; unstated counts as allowed.
+- **Usage is an input.** `evaluate()` receives held-plus-spent and counts per `(owner, window_id)` for every window it checks; the spoke and every ancestor scope their own rules' aggregates, the wheel scopes Tier 0, jurisdiction and hub rules.
+- **A limit in another currency is never satisfied** by the proposal's amount.
+- **Allow-style checks need a verified fact; block-style checks fire on any fact.** Silent-approval preconditions read verified facts only.
+- **Default rail:** the live permitted rail with the highest authentication class, then `bound_at_rail`, then the lowest `rail_id`.
+- **The time-zone database** is pinned as a dependency, because window and span results depend on it.
 
 ---
 
@@ -307,6 +317,8 @@ Determination {
 | `findings.open_on_spoke` | `int` |
 | `merchant.item_attributes.<item_id>` | `TermSet` |
 | `merchant.cart_hash` | `str` (a `Hash`) |
+| `merchant.categories` | `TermSet` |
+| `destination.first_used_at` | `Timestamp` |
 | `fx.<from>.<to>` | `Ratio` |
 | `recovery.pending` | `bool` |
 | `ext.<namespace>.<name>` | declared with the namespace; unknown names are treated as unverified |
