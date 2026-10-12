@@ -534,6 +534,15 @@ Handover (old wheel chain, last record) {
 - **Imported, never re-signed:** the new host keeps a read-only copy of the old chain and the old host's key log export, so old signatures verify after the old host is gone.
 - **Payer check:** the payer's Trusted Surface holds the last chain head it was sent and confirms that the `Handover` follows it, so no history can be dropped in the move.
 
+### 10.2 Fixed while building Phase 6
+- **Determinations carry `input_hash` and `input_ref`.** The exact evaluation input is encoded with `gap_core.codec` (lossless, canonical, no floats or nulls), stored encrypted in the profile store, and its hash recorded in the ledger. A verifier holding the input re-runs `evaluate()` and must get byte-identical output.
+- **Proposal records** also carry `merchant_cart_ref`, `content_hash` (what was in the cart, computable by the merchant too, for `item_mismatch`), `cart_hash` (the duplicate guard) and `body_ref`.
+- **Surface assertions (reference surface):** `{action, proposal_id, subject_hash, surface_key_id, occurred_at, value}`; for an override the subject is `hash({presented_hash, overridden})`. The full challenge protocol is Phase 7.
+- **A refusal the payer overrode executes** only when every failing clause is payer-authored and named in the override.
+- **An adapter must be registered under the id it reports;** otherwise reconciliation cannot find the payments it executed (found by the Phase 6 simulation, where 40 payments stayed held).
+- **A finding's subject** is the refund for `refund_stalled`, the order for `external_order`, else the payment (found by test: stalled refunds could never close).
+- **Evidence bundles** carry the disclosed records, a hash-only skeleton of the wheel chain from the first related record to the head (so records can be placed without disclosing anyone else's), the key log, any disclosed inputs, the evaluator digest, the divergence, and the host's signature. Every bundle is logged as a `release` on `releases:<host>`.
+
 ## 11. Profile store and data keys (`07` §8)
 
 ```

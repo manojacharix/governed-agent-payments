@@ -1,35 +1,35 @@
-"""make simulate: a larger seeded synthetic run on a throwaway Postgres, with a summary.
+"""make simulate: a seeded synthetic run of the full flow on a throwaway Postgres, with a summary.
 
 Usage: uv run python tools/simulate.py [seed] [payers] [events]
 """
 
 import sys
 import time
+from pathlib import Path
 
 import psycopg
 
 from gap_ledger.pgtemp import LEDGER_SQL, TempCluster
-from gap_sim.simulate import run
+from gap_sim.flow_sim import run
 
-seed, payers, events = (int(a) for a in (sys.argv[1:] + ["42", "60", "5000"][len(sys.argv) - 1:]))
+seed, payers, events = (int(a) for a in (sys.argv[1:] + ["42", "40", "3000"][len(sys.argv) - 1:]))
+ROOT = Path(__file__).resolve().parents[1]
 pg = TempCluster()
 try:
     pg.create_template("tmpl_ledger", LEDGER_SQL)
-    conn = psycopg.connect(pg.fresh_db("tmpl_ledger", "sim"), autocommit=True)
-    conn.execute("SET ROLE ledger_writer")
+    pg.create_template("tmpl_profile", sorted((ROOT / "packages/profile/src/gap_profile/sql").glob("*.sql")))
+    lc = psycopg.connect(pg.fresh_db("tmpl_ledger", "sim"), autocommit=True)
+    lc.execute("SET ROLE ledger_writer")
+    pc = psycopg.connect(pg.fresh_db("tmpl_profile", "simp"), autocommit=True)
+    pc.execute("SET ROLE profile_writer")
     t0 = time.perf_counter()
-    rep = run(conn, seed=seed, payers=payers, events=events, minutes_per_event=max(1, 75 * 1440 // events))
+    rep = run(lc, pc, seed=seed, payers=payers, events=events, minutes_per_event=max(1, 60 * 1440 // events), bundles=40)
     dt = time.perf_counter() - t0
-    print(f"seed {seed}: {payers} payers, {rep.events} proposals over about 75 days, in {dt:.1f}s ({rep.events / dt:.0f}/s)")
-    print(f"ledger: {rep.records} signed records in {rep.chains} chains, integrity verified")
-    print("decisions:   " + ", ".join(f"{k} {v}" for k, v in sorted(rep.outcomes.items())))
-    print("settlements: " + ", ".join(f"{k} {v}" for k, v in sorted(rep.settlements.items())))
-    print("adversarial inputs and what happened to them:")
-    for k, v in sorted(rep.adversarial.items()):
-        print(f"  {k:<36} {v}")
-    print("most common reasons a proposal was not allowed:")
-    for k, v in rep.clauses.most_common(10):
-        print(f"  {k:<36} {v}")
+    print(f"seed {seed}: {payers} payers, {rep.proposals} proposals over about 60 days, in {dt:.0f}s; {rep.records} signed records, integrity verified")
+    print("proposal outcomes: " + ", ".join(f"{k} {v}" for k, v in sorted(rep.statuses.items())))
+    print("payer actions:     " + ", ".join(f"{k} {v}" for k, v in sorted(rep.actions.items())))
+    print("findings:          " + ", ".join(f"{k} {v}" for k, v in sorted(rep.findings.items())))
+    print("evidence bundles:  " + ", ".join(f"{k} {v}" for k, v in sorted(rep.bundles.items())))
     print(f"violations: {len(rep.violations)}")
     for v in rep.violations[:20]:
         print("  " + v)

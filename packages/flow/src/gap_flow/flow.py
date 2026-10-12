@@ -101,6 +101,9 @@ class Flow:
     def register(self, dep: Deployment) -> None:
         """Record the wheel's and spokes' versions; their documents go to the profile store (19 §1.6)."""
         w = dep.wheel
+        for key, ad in dep.adapters.items():  # reconciliation finds adapters by the id recorded at execution
+            if ad.describe().adapter_id != key:
+                raise FlowError(f"adapter registered as {key!r} reports itself as {ad.describe().adapter_id!r}")
         self.deployments[w.wheel_id] = dep
         self.intents.setdefault(w.wheel_id, {})
         self.recent.setdefault(w.wheel_id, [])

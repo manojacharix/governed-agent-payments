@@ -99,6 +99,14 @@ def test_propose_approve_execute_settle(world):
     assert flow.ledger.verify_integrity(flow.keylog.public_keys()).ok
 
 
+def test_an_adapter_registered_under_the_wrong_id_is_refused(world):
+    flow, m, surface, clock, bank = world
+    from gap_flow.flow import Deployment
+    dep = flow.deployments["whl_1"]
+    with pytest.raises(FlowError, match="reports itself"):
+        flow.register(Deployment(dep.wheel, dep.spokes, dep.ctx, {"fake-x": m}, bank))
+
+
 def test_stored_inputs_replay_to_the_same_bytes(world):
     flow, m, surface, clock, bank = world
     add_cart(m)

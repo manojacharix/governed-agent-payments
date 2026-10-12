@@ -3,7 +3,7 @@ name = "gap-sim"
 version = "0.1.0"
 description = "Seeded synthetic workloads: run the whole stack on many payers and months, then check invariants"
 requires-python = ">=3.12"
-dependencies = ["gap-core", "gap-keys", "gap-mapping", "gap-ledger", "gap-adapters"]
+dependencies = ["gap-core", "gap-keys", "gap-mapping", "gap-ledger", "gap-adapters", "gap-flow", "gap-evidence", "gap-profile", "gap-recon"]
 
 [tool.uv.sources]
 gap-core = { workspace = true }
@@ -11,6 +11,10 @@ gap-keys = { workspace = true }
 gap-mapping = { workspace = true }
 gap-ledger = { workspace = true }
 gap-adapters = { workspace = true }
+gap-flow = { workspace = true }
+gap-evidence = { workspace = true }
+gap-profile = { workspace = true }
+gap-recon = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

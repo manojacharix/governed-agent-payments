@@ -4,7 +4,7 @@ When software spends a person's money at a merchant, record what they authorised
 
 This repository is **the infrastructure layer only**. It contains no product, no merchant integration and no app. Products built on the layer live in their own repositories.
 
-**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 to 5 built 12 Oct (primitives; the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution). Phase 6 (proposal flow, reconciliation, evidence) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
+**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 to 6 built (primitives; the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier). This is the core checkpoint. Phase 7 (identity) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
 
 ---
 
@@ -48,7 +48,8 @@ make evaluate      # the evaluator on six situations
 make mappings      # one evaluator, India / UK mappings and two operators swapped underneath
 make ledger        # Postgres ledger: payments, an overcharge, erasure, and a database admin's edit caught
 make execute       # ambiguous merchant responses (timeouts, errors) never become a second order
-make simulate      # synthetic run: 60 payers, 5,000 proposals over 75 days, invariants checked (SEED=, PAYERS=, EVENTS=)
+make evidence      # one payment from request to proof; the open verifier catches an edited bundle
+make simulate      # synthetic run of the full flow: 40 payers, 3,000 proposals over 60 days, invariants and evidence checked (SEED=, PAYERS=, EVENTS=)
 ```
 
 | Package | Contents |
@@ -58,6 +59,9 @@ make simulate      # synthetic run: 60 payers, 5,000 proposals over 75 days, inv
 | `packages/ledger` (`gap_ledger`) | Postgres ledger with database-enforced chains, money in flight (holds, captures, releases, overcaptures, refunds), key log, `verify_integrity()` |
 | `packages/profile` (`gap_profile`) | Postgres profile store: personal data under per-payer AES-256-GCM keys, salted commitments, retention holds, shredding |
 | `packages/adapters` (`gap_adapters`) | Merchant adapter interface, two fake merchants of different shapes (contract-tested), and the executor: guards, prove-before-retry, signed execution attempts |
+| `packages/recon` (`gap_recon`) | Reconciliation sweeps: settle on consistent evidence, all nine finding kinds, bank feed, refunds, payer acceptance |
+| `packages/flow` (`gap_flow`) | The proposal flow: host-captured carts, stored replayable inputs, approve / override / decline / expire, silent repeats after notice, stage 2, hold, execute, reconcile; a software reference surface |
+| `packages/evidence` (`gap_evidence`) | Evidence bundles with role-scoped disclosure and divergence, release log, and the open verifier |
 | `packages/sim` (`gap_sim`) | Seeded synthetic workloads through the whole stack: personal and procurement payers on the shipped configs, messy settlements, adversarial inputs; a shadow ledger and invariant checks |
 | `packages/mapping` (`gap_mapping`) | Loads jurisdiction mappings (`mappings/`) and Tier 0 configs (`tier0/`) strictly into core types |
 
