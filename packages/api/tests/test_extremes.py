@@ -133,8 +133,20 @@ def test_enrolment_and_oauth_inputs_are_validated(w, api, path, body):
     assert 400 <= r.status_code < 500, r.text[:200]
 
 
-def test_loopback_redirects_are_allowed_for_native_apps(api):
-    assert api.post("/v1/oauth/register", json={"client_name": "cli", "redirect_uri": "http://127.0.0.1:8765/cb"}).status_code == 200
+@pytest.mark.parametrize("uri", ["http://127.0.0.1:8765/cb", "http://localhost/cb", "http://[::1]:9000/cb", "https://a.example/cb"])
+def test_loopback_and_https_redirects_are_allowed(api, uri):
+    assert api.post("/v1/oauth/register", json={"client_name": "cli", "redirect_uri": uri}).status_code == 200
+
+
+@pytest.mark.parametrize("uri", [
+    "http://localhost.evil.example/cb", "http://localhost@evil.example/cb", "http://127.0.0.1.evil.example/cb",
+    "http://127.0.0.1:80@evil.example/", "http://[::1].evil.example/", "https://user@a.example/cb", "https:///cb",
+    "https://a.example/cb#frag", "http://evil.example/cb", "HTTP://localhost:abc/", "https://a.example/\\@evil.example",
+    "https://a.example/ cb", "https://a.example/\ncb", "data:text/html,x", "javascript:alert(1)//https://a.example",
+])
+def test_lookalike_redirects_are_refused(api, uri):
+    """Security review: prefix matching let localhost.evil.example and localhost@evil.example pass as loopback."""
+    assert api.post("/v1/oauth/register", json={"client_name": "cli", "redirect_uri": uri}).status_code == 422
 
 
 def test_payer_endpoints_validate_their_inputs(w, api):

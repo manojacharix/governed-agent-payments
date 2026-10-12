@@ -48,6 +48,24 @@ MAX_ANSWER_FAILURES, LOCKOUT = 5, timedelta(hours=24)
 
 MAX_NONCE = 128
 
+
+def _redirect_ok(uri) -> bool:
+    """Parsed, never prefix-matched: an https URL with a host, or http to an exact loopback host (RFC 8252 §7.3).
+    No userinfo (localhost@evil.example), no fragment (RFC 6749 §3.1.2), no control characters or spaces."""
+    from urllib.parse import urlsplit
+    if not isinstance(uri, str) or len(uri) > 2048 or any(ord(c) < 0x21 or c == "\x7f" or c == "\\" for c in uri):
+        return False
+    try:
+        u = urlsplit(uri)
+        host, _port = u.hostname, u.port  # port raises on garbage
+    except ValueError:
+        return False
+    if not host or "@" in u.netloc or u.fragment or "#" in uri:
+        return False
+    if u.scheme == "https":
+        return True
+    return u.scheme == "http" and host in ("127.0.0.1", "localhost", "::1")
+
 class IdentityError(RuntimeError):
     """An identity check failed. `reason` is a short machine-readable code."""
 
@@ -226,8 +244,7 @@ class Identity:
         loopback for native apps (RFC 8252); nothing else (javascript:, data:, plain http to a remote host)."""
         if not isinstance(client_name, str) or not 1 <= len(client_name) <= 200 or "\x00" in client_name:
             raise IdentityError("bad_request", "client_name must be 1 to 200 characters")
-        if not isinstance(redirect_uri, str) or len(redirect_uri) > 2048 or not (
-                redirect_uri.startswith("https://") or redirect_uri.startswith(("http://127.0.0.1", "http://localhost", "http://[::1]"))):
+        if not _redirect_ok(redirect_uri):
             raise IdentityError("bad_request", "redirect_uri must be https, or loopback http")
         cid = f"cli_{secrets.token_hex(8)}"
         self.clients[cid] = {"claimed_name": client_name, "redirect_uri": redirect_uri}
