@@ -1,0 +1,19 @@
+[project]
+name = "gap-api"
+version = "0.1.0"
+description = "Interfaces (build plan Phase 8): HTTP API and the governance MCP server, over one host service"
+requires-python = ">=3.12"
+dependencies = ["gap-core", "gap-flow", "gap-identity", "gap-evidence", "fastapi>=0.115", "httpx>=0.27", "mcp>=1.2"]
+
+[tool.uv.sources]
+gap-core = { workspace = true }
+gap-flow = { workspace = true }
+gap-identity = { workspace = true }
+gap-evidence = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gap_api"]

@@ -551,6 +551,14 @@ Handover (old wheel chain, last record) {
 - **Recovery** requires the answers and a user-verifying new device, plus either the recovery key (no delay) or the external check (delayed, cancellable, payments suspended). A replacement device that does not verify the user is refused (found by test).
 - **A suspended payer's wheels are evaluated as suspended;** `recovery.pending` is injected by the host on every evaluation.
 
+### 10.4 Fixed while building Phase 8
+- **One host service** sits under both interfaces; neither holds policy (R1).
+- **Agent requests are authenticated on every call,** reads included: `Authorization: Bearer` with `X-GAP-Nonce` and `X-GAP-Created-At`, or `X-GAP-Proof` signed by a key-bound caller over `read:<method>:<path>`.
+- **Agents see only their own proposals** (another caller's proposal answers 404) **and the spokes bound to them,** with the room left this window (invariant 22).
+- **Unknown request fields are refused** before anything else (`unmodelled_attribute`, invariant 1). Facts an agent sends are always recorded as unverified.
+- **The MCP server has no approve, override or decline tool** (invariant 7); `proceed_to_pay` only hands off. List tools return named objects (`{"proposals": [...]}`, `{"spokes": [...]}`) so clients get structured output.
+- **Deployments may add host-side fact sources** (e.g. an operator's ERP), captured and attested by the host; agent claims never substitute for them.
+
 ## 11. Profile store and data keys (`07` §8)
 
 ```

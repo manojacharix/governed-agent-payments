@@ -63,6 +63,7 @@ class Deployment:
     notice_duration_s: int = 300
     proposal_ttl_s: int = 900
     sweep_before_hold: bool = False
+    fact_sources: tuple = ()  # host-side sources (e.g. an ERP): callables(request) -> [Fact], captured by the host
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,8 @@ class Flow:
             Fact("findings.open_on_spoke", self.recon.open_tap_findings_by_spoke(dep.wheel.wheel_id).get(req.spoke_id, 0), "host", True, "injected"),
             Fact("recovery.pending", self.identity.recovery_pending(dep.wheel.payer_ref), "host", True, "injected"),
         ]
+        for source in dep.fact_sources:
+            host += list(source(req))
         names = {f.name for f in host + list(extra)}
         return FactSet([f for f in req.facts if f.name not in names] + host + list(extra))
 

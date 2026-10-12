@@ -4,7 +4,7 @@ When software spends a person's money at a merchant, record what they authorised
 
 This repository is **the infrastructure layer only**. It contains no product, no merchant integration and no app. Products built on the layer live in their own repositories.
 
-**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 to 6 built (primitives; the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier). Phase 7 (identity) built: challenge-bound approvals, enrolled agents with proofs, recovery and compromise handling. Phase 8 (HTTP API and MCP server) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
+**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 to 6 built (primitives; the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier). Phase 7 (identity) built: challenge-bound approvals, enrolled agents with proofs, recovery and compromise handling. Phase 8 built: the HTTP API and the governance MCP server over one host service, with the procurement operator running through the same API. This is the publication gate (publishing stays Manoj's decision; the LinkedIn embargo holds). Phase 9 (readable evidence page and `make demo`) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
 
 ---
 
@@ -50,6 +50,7 @@ make ledger        # Postgres ledger: payments, an overcharge, erasure, and a da
 make execute       # ambiguous merchant responses (timeouts, errors) never become a second order
 make evidence      # one payment from request to proof; the open verifier catches an edited bundle
 make identity      # strangers, replays and reused approvals refused; backup key cannot pay; recovery to a new phone
+make interfaces    # an agent over MCP proposes, the payer's device approves over HTTP
 make simulate      # synthetic run of the full flow: 40 payers, 3,000 proposals over 60 days, invariants and evidence checked (SEED=, PAYERS=, EVENTS=)
 ```
 
@@ -64,6 +65,7 @@ make simulate      # synthetic run of the full flow: 40 payers, 3,000 proposals 
 | `packages/flow` (`gap_flow`) | The proposal flow: proven callers, host-captured carts, stored replayable inputs, challenge-bound approve / override / decline, expiry, silent repeats after notice, stage 2, hold, execute, reconcile |
 | `packages/evidence` (`gap_evidence`) | Evidence bundles with role-scoped disclosure and divergence, release log, and the open verifier |
 | `packages/identity` (`gap_identity`) | Challenges, surface assertions (ES256 or WebAuthn) with strength from the jurisdiction's scale, approval-gated enrolment, OAuth 2.1 + PKCE and signed proofs for agents, replay protection, recovery questions, recovery, compromise and suspension |
+| `packages/api` (`gap_api`) | One host service; the HTTP API (FastAPI) and the governance MCP server (MCP 2.x) over it. Agents propose, read their own proposals and spokes, request changes and hand off; only the payer's device approves |
 | `packages/sim` (`gap_sim`) | Seeded synthetic workloads through the whole stack: personal and procurement payers on the shipped configs, messy settlements, adversarial inputs; a shadow ledger and invariant checks |
 | `packages/mapping` (`gap_mapping`) | Loads jurisdiction mappings (`mappings/`) and Tier 0 configs (`tier0/`) strictly into core types |
 
