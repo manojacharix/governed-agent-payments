@@ -428,8 +428,9 @@ def _check(rule: Rule, owner: str, inp: EvaluationInput, ctx: _Ctx, rail: RailPr
                 ctx.rule_fail(rule)
 
     elif d == "conditions":
-        # effects only add caution, so any fact (verified or not) may trigger them
-        if evaluate_predicate(c["when"], facts, verified_only=False):
+        # Effects only add caution. The condition fires if it holds with all facts OR with verified facts
+        # only, so an unverified fact can never switch it off, even through `not` (found by property test).
+        if evaluate_predicate(c["when"], facts, verified_only=False) or evaluate_predicate(c["when"], facts, verified_only=True):
             if c["effect"] == "block":
                 ctx.rule_fail(rule)
             elif c["effect"] == "force_explicit_tap":

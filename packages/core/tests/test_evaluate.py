@@ -274,6 +274,18 @@ def test_condition_effects():
             assert det.clarify_fields == ("c1",)
 
 
+def test_unverified_fact_cannot_switch_off_a_negated_condition():
+    """Regression (found by the property test in CI): `not exists` must not be defeated by an unverified fact."""
+    inp = scenario()
+    r = rule("c1", "conditions", when={"not": {"fact": "notice.delivered", "op": "exists"}}, effect="clarify")
+    inp = replace(inp, wheel=replace(inp.wheel, rules=(r,)))
+    assert evaluate(inp).outcome == "clarify"
+    unverified = inp.facts.with_fact(Fact("notice.delivered", True, "anyone", False, "capturer_signed"))
+    assert evaluate(replace(inp, facts=unverified)).outcome == "clarify"
+    verified = inp.facts.with_fact(Fact("notice.delivered", True, "host", True, "injected"))
+    assert evaluate(replace(inp, facts=verified)).outcome == "allow"
+
+
 def test_condition_on_a_missing_fact_has_no_effect():
     inp = scenario()
     r = rule("c1", "conditions", when={"fact": "account.open_disputes", "op": "ge", "value": 1}, effect="block")
