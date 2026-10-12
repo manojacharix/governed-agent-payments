@@ -559,6 +559,12 @@ Handover (old wheel chain, last record) {
 - **The MCP server has no approve, override or decline tool** (invariant 7); `proceed_to_pay` only hands off. List tools return named objects (`{"proposals": [...]}`, `{"spokes": [...]}`) so clients get structured output.
 - **Deployments may add host-side fact sources** (e.g. an operator's ERP), captured and attested by the host; agent claims never substitute for them.
 
+### 10.5 Fixed while building Phase 9
+- **A rendering is never the evidence.** Every readable view (text or HTML) states that it is a rendering, names the bundle it came from, and points to the open verifier.
+- **Rendering is pure:** same bundle and verifier report, same bytes; nothing from the bundle reaches the page unescaped.
+- **The timeline follows chain order** and names, for every failing clause, the rule, its dimension, its author and whether the payer may override it.
+- **`make demo` is snapshot-tested.** Random IDs and hashes are normalised to stable placeholders; any other change to the story's output fails the test until accepted with `UPDATE_GOLDEN=1`.
+
 ## 11. Profile store and data keys (`07` §8)
 
 ```

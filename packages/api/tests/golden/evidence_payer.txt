@@ -1,0 +1,35 @@
+EVIDENCE (a rendering of bundle bnd#1; the bundle is the evidence)
+Proposal prp#1 on wheel whl_1, disclosed to the payer (default).
+
+Verifier
+  Bundle signed by the host                     ok
+  Key log anchored to the pinned host key       ok
+  Every record's signature                      ok
+  Records sit where the chain says              ok
+  Keys valid when used                          ok
+  Decision replays from its inputs              reproduced
+  Payer approved exactly what was shown         matches
+  All checks pass                               True
+
+Where authority and reality diverged: merchant divergence
+
+Timeline
+  2026-10-12T09:00:00.000Z  agent            Proposed paying 190.00 INR to mrc_shop under spoke spk_grocery (intent weekly-groceries).
+  2026-10-12T09:00:00.000Z  evaluator        At proposal: allow, explicit tap on xx:upi.
+  2026-10-12T09:02:40.000Z  payer's device   The payer approved on device key_phone (strength: two_factor).
+  2026-10-12T09:02:40.000Z  evaluator        At approval, with the cart fetched again: allow, explicit tap on xx:upi.
+  2026-10-12T09:02:40.000Z  host             Resolved: approved by the payer.
+  2026-10-12T09:02:40.000Z  ledger           Held 190.00 INR on spk_grocery (2026-10).
+  2026-10-12T09:02:40.000Z  ledger           Held 190.00 INR on whl_1 (2026-10).
+  2026-10-12T09:02:40.000Z  merchant         Attempt 1 on xx:upi at fake-b: ok -> success, order b-order-1.
+  2026-10-12T10:02:40.000Z  ledger           Captured 190.00 INR on spk_grocery (2026-10) on evidence from bank.
+  2026-10-12T10:02:40.000Z  ledger           Charged beyond the hold 7.00 INR on spk_grocery (2026-10) on evidence from bank.
+  2026-10-12T10:02:40.000Z  ledger           Captured 190.00 INR on whl_1 (2026-10) on evidence from bank.
+  2026-10-12T10:02:40.000Z  ledger           Charged beyond the hold 7.00 INR on whl_1 (2026-10) on evidence from bank.
+  2026-10-12T10:02:40.000Z  reconciliation   Finding overcapture opened (excess: 700 minor units).
+  2026-10-12T10:02:40.000Z  reconciliation   Reconciliation sweep (scheduled).
+
+Facts the decision used, and who vouches for them
+  findings.open_on_spoke                   injected         verified source
+  merchant.rails_offered                   capturer_signed  verified source
+  recovery.pending                         injected         verified source

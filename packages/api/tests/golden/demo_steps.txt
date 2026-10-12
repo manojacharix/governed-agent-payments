@@ -1,0 +1,8 @@
+1. The agent proposes over MCP: allow, awaiting approval (rail xx:upi, amount bound at rail)
+2. The agent hands off to the payer (awaiting payer); it has no way to approve
+3. The payer approves on their device: executed, merchant order b-order-1
+4. The bank shows the debit; reconciliation opens: overcapture (7.00 INR more than approved)
+5. The payer's bundle: 14 records; verifier passes: True; replay: reproduced; divergence: merchant divergence
+6. The merchant's bundle: ['resolution'] only; verifier passes: True
+7. Someone edits the payer's bundle to hide the overcharge: verifier passes: False
+8. Every disclosure is logged: [('payer', 'default'), ('merchant', 'default')]

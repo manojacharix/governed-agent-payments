@@ -4,7 +4,7 @@ When software spends a person's money at a merchant, record what they authorised
 
 This repository is **the infrastructure layer only**. It contains no product, no merchant integration and no app. Products built on the layer live in their own repositories.
 
-**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 to 6 built (primitives; the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier). Phase 7 (identity) built: challenge-bound approvals, enrolled agents with proofs, recovery and compromise handling. Phase 8 built: the HTTP API and the governance MCP server over one host service, with the procurement operator running through the same API. This is the publication gate (publishing stays Manoj's decision; the LinkedIn embargo holds). Phase 9 (readable evidence page and `make demo`) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
+**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 to 6 built (primitives; the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier). Phase 7 (identity) built: challenge-bound approvals, enrolled agents with proofs, recovery and compromise handling. Phase 8 built: the HTTP API and the governance MCP server over one host service, with the procurement operator running through the same API. This is the publication gate (publishing stays Manoj's decision; the LinkedIn embargo holds). Phase 9 built: readable evidence pages and `make demo`. All nine build-plan phases are done. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
 
 ---
 
@@ -51,6 +51,8 @@ make execute       # ambiguous merchant responses (timeouts, errors) never becom
 make evidence      # one payment from request to proof; the open verifier catches an edited bundle
 make identity      # strangers, replays and reused approvals refused; backup key cannot pay; recovery to a new phone
 make interfaces    # an agent over MCP proposes, the payer's device approves over HTTP
+make demo          # the whole story: agent proposes, payer approves, merchant overcharges, reconciliation catches it,
+                   # evidence bundles verified, a forged bundle caught; readable pages written to out/
 make simulate      # synthetic run of the full flow: 40 payers, 3,000 proposals over 60 days, invariants and evidence checked (SEED=, PAYERS=, EVENTS=)
 ```
 
