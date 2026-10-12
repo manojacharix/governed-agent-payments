@@ -558,6 +558,12 @@ ledger_records (
 
 **Profile database:** `profile_records`, `data_keys`, `recovery_secrets` (Argon2id hashes only), with `UPDATE` allowed only on `data_keys.status`, `wrapped` and `hold`.
 
+**Fixed while building Phase 4 (12 Oct):**
+- **Defence in depth.** Triggers stop edits, deletes, truncation and out-of-order inserts even for the table owner, but a superuser can disable triggers; `verify_integrity()` therefore re-checks every chain from the stored bytes (links, record hashes, mirrored columns, signatures).
+- **Key log anchor.** The first key-log entry is the host's key, self-signed; verifiers pin it. Signatures are checked against every key ever enrolled (retired keys' past signatures stay valid); an audit flags records signed after a key's `compromised_since` or after its revocation, using the record's own time field (`posted_at`, `occurred_at`, `evaluated_at`, `issued_at`, `released_at`, `received_at`, `at`); a record with no time field is flagged.
+- **Postings.** `signal_ref` is `<source>:<ref>` with source `merchant`, `rail`, `bank` or `reconciliation`; any other source is refused. A capture below the hold posts `capture` and `release` in one group; above it, `capture` and `overcapture`. The usage count for velocity is the number of holds placed in the window.
+- **Profile records** are encrypted with AES-256-GCM using the `profile_ref` as associated data, so ciphertext cannot be moved between records.
+
 **Evidence files:** bundles and raw sweep snapshots in object storage with retention lock; any personal data inside is encrypted under the payer's data key.
 
 ---

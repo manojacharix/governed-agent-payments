@@ -4,7 +4,7 @@ When software spends a person's money at a merchant, record what they authorised
 
 This repository is **the infrastructure layer only**. It contains no product, no merchant integration and no app. Products built on the layer live in their own repositories.
 
-**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 to 3 (primitives, the evaluator, jurisdiction mappings and Tier 0 configs) built 12 Oct; Phase 4 (ledger, money in flight, key log) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
+**Status (12 Oct 2026):** seven specs reviewed; `07` approved. Scope: merchant commerce (an agent paying a merchant for an order). Phases 1 to 4 built 12 Oct (primitives; the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store). Phase 5 (merchant adapters, rails, execution) next. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
 
 ---
 
@@ -38,7 +38,7 @@ Document numbers are permanent identifiers: "`07`" means `specs/07_identity_and_
 
 ## Development
 
-Requires [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/) and PostgreSQL binaries (`initdb`, `pg_ctl`; e.g. `brew install postgresql@17`). Tests start a throwaway cluster in a temp folder; set `GAP_TEST_PG_DSN` to use an existing server instead.
 
 ```
 uv sync            # install the workspace
@@ -46,12 +46,15 @@ make test          # all tests
 make demo-phase1   # sign a chain, tamper with it, see verification fail
 make evaluate      # the evaluator on six situations
 make mappings      # one evaluator, India / UK mappings and two operators swapped underneath
+make ledger        # Postgres ledger: payments, an overcharge, erasure, and a database admin's edit caught
 ```
 
 | Package | Contents |
 |---|---|
 | `packages/core` (`gap_core`) | Pure: Money, canonical JSON (RFC 8785), hashing, IDs, timestamps, injected clock, ES256 verification, hash chains, and `evaluate()` with the 14 rule dimensions. No I/O, no clock reads (enforced by `test_purity.py`) |
 | `packages/keys` (`gap_keys`) | Signers: a local software signer for development and tests |
+| `packages/ledger` (`gap_ledger`) | Postgres ledger with database-enforced chains, money in flight (holds, captures, releases, overcaptures, refunds), key log, `verify_integrity()` |
+| `packages/profile` (`gap_profile`) | Postgres profile store: personal data under per-payer AES-256-GCM keys, salted commitments, retention holds, shredding |
 | `packages/mapping` (`gap_mapping`) | Loads jurisdiction mappings (`mappings/`) and Tier 0 configs (`tier0/`) strictly into core types |
 
 | Configuration | Contents |

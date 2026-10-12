@@ -2,7 +2,7 @@
 
 **Status:** written 9 Oct 2026. Builds the infrastructure in `../specs/` and nothing else: no product, no merchant integration, no app. Where this plan and a spec disagree, the spec wins.
 
-**Progress:** Phases 1 to 3 done (12 Oct 2026). **Next action:** Phase 4 (ledger, money in flight, key log, profile store).
+**Progress:** Phases 1 to 4 done (12 Oct 2026). **Next action:** Phase 5 (merchant adapters, rails, execution).
 
 ---
 
