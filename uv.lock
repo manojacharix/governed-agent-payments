@@ -290,6 +290,7 @@ source = { editable = "packages/flow" }
 dependencies = [
     { name = "gap-adapters" },
     { name = "gap-core" },
+    { name = "gap-identity" },
     { name = "gap-keys" },
     { name = "gap-ledger" },
     { name = "gap-profile" },
@@ -300,6 +301,7 @@ dependencies = [
 requires-dist = [
     { name = "gap-adapters", editable = "packages/adapters" },
     { name = "gap-core", editable = "packages/core" },
+    { name = "gap-identity", editable = "packages/identity" },
     { name = "gap-keys", editable = "packages/keys" },
     { name = "gap-ledger", editable = "packages/ledger" },
     { name = "gap-profile", editable = "packages/profile" },

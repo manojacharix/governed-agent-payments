@@ -24,10 +24,10 @@ try:
     w = make_world(Ledger(lc), pc, evaluator_digest=evaluator_digest())
     w.merchant.add_cart("cart-1", LINES)
     w.merchant.script = ["overcharge:700"]
-    p = w.flow.propose("whl_1", w.request())
+    p = w.propose(w.request())
     print(f"1. Agent proposes 195 rupees of groceries -> {p.determination.outcome}, approval: {p.determination.approval_mode.replace("_", " ")}")
     out = w.approve(p)
-    print(f"2. Payer approves on the reference surface -> executed, merchant order {out.result.merchant_order_ref}")
+    print(f"2. Payer approves on their device -> executed, merchant order {out.result.merchant_order_ref}")
     w.pay_bank(out.result)
     w.flow.tick(sweep=True)
     for f in w.flow.recon.open_findings("whl_1"):

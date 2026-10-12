@@ -1,4 +1,4 @@
-.PHONY: test demo-phase1 evaluate mappings ledger simulate execute evidence
+.PHONY: test demo-phase1 evaluate mappings ledger simulate execute evidence identity
 
 test:
 	uv run pytest
@@ -23,3 +23,6 @@ execute:
 
 evidence:
 	uv run python tools/demo_phase6.py
+
+identity:
+	uv run python tools/demo_phase7.py

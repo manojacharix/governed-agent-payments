@@ -3,7 +3,7 @@ name = "gap-flow"
 version = "0.1.0"
 description = "gap flow"
 requires-python = ">=3.12"
-dependencies = ["gap-core", "gap-keys", "gap-ledger", "gap-adapters", "gap-recon", "gap-profile"]
+dependencies = ["gap-core", "gap-keys", "gap-ledger", "gap-adapters", "gap-recon", "gap-profile", "gap-identity"]
 
 [tool.uv.sources]
 gap-core = { workspace = true }
@@ -12,6 +12,7 @@ gap-ledger = { workspace = true }
 gap-adapters = { workspace = true }
 gap-recon = { workspace = true }
 gap-profile = { workspace = true }
+gap-identity = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

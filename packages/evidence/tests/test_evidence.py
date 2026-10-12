@@ -20,7 +20,7 @@ def w(ledger, profile_conn):
 def paid(w, script=("ok",), lines=LINES):
     w.merchant.add_cart("cart-1", lines)
     w.merchant.script = list(script)
-    p = w.flow.propose("whl_1", w.request())
+    p = w.propose(w.request())
     out = w.approve(p)
     w.pay_bank(out.result)
     w.flow.tick(sweep=True)

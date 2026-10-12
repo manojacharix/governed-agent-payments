@@ -543,6 +543,14 @@ Handover (old wheel chain, last record) {
 - **A finding's subject** is the refund for `refund_stalled`, the order for `external_order`, else the payment (found by test: stalled refunds could never close).
 - **Evidence bundles** carry the disclosed records, a hash-only skeleton of the wheel chain from the first related record to the head (so records can be placed without disclosing anyone else's), the key log, any disclosed inputs, the evaluator digest, the divergence, and the host's signature. Every bundle is logged as a `release` on `releases:<host>`.
 
+### 10.3 Fixed while building Phase 7
+- **Challenge bytes** are `SHA-256(canonical({challenge_id, nonce, action, subject_hash}))`; a raw ES256 surface signs them, a WebAuthn authenticator uses them as its challenge. A challenge also binds the `payer_ref`; it is single-use and expires.
+- **Strength:** possession of the enrolled key, plus `inherence` or `knowledge` when the user was verified, mapped to the highest level on the jurisdiction's scale whose factors are all present. For WebAuthn, user verification is the UV flag; for raw ES256 it is the platform's declared check on the key.
+- **Proposals are authenticated before evaluation.** A failed proof returns `Rejected(sys.*)` and nothing is recorded; the caller and its assurance passed to `evaluate()` come from the proof, never from the request. A key-bound proof signs `canonical({caller_id, intent_id, nonce, created_at, digest})`, where `digest` covers the request (spoke, intent, merchant, adapter, cart, destination, rail).
+- **Session-bound callers** use dynamic client registration and OAuth 2.1 with PKCE S256: single-use codes, 15-minute access tokens, refresh tokens that work once (rotation).
+- **Recovery** requires the answers and a user-verifying new device, plus either the recovery key (no delay) or the external check (delayed, cancellable, payments suspended). A replacement device that does not verify the user is refused (found by test).
+- **A suspended payer's wheels are evaluated as suspended;** `recovery.pending` is injected by the host on every evaluation.
+
 ## 11. Profile store and data keys (`07` §8)
 
 ```

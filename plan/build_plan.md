@@ -2,7 +2,7 @@
 
 **Status:** written 9 Oct 2026. Builds the infrastructure in `../specs/` and nothing else: no product, no merchant integration, no app. Where this plan and a spec disagree, the spec wins.
 
-**Progress:** Phases 1 to 6 done (core checkpoint reached), with a synthetic-workload harness (`make simulate`) that each later phase extends. **Next action:** Phase 5 (merchant adapters, rails, execution).
+**Progress:** Phases 1 to 7 done (core checkpoint reached; identity built), with a synthetic-workload harness (`make simulate`) that each later phase extends. **Next action:** Phase 5 (merchant adapters, rails, execution).
 
 ---
 

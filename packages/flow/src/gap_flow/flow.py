@@ -31,11 +31,24 @@ from gap_ledger.money import Account, HoldRefused, MoneyInFlight, Signal, replay
 from gap_profile.store import ProfileStore
 from gap_recon.recon import BankFeed, Reconciler
 
-from .surface import check
+from gap_identity.identity import Identity, IdentityError
 
 
 class FlowError(RuntimeError):
     """The request was refused before anything was recorded (unknown proposal, bad assertion, wrong state)."""
+
+
+@dataclass(frozen=True)
+class Rejected:
+    """A proposal refused before evaluation: the caller could not prove who it is (07 §4.2)."""
+
+    reason: str  # sys.proof_invalid | sys.proof_stale | sys.nonce_reused | sys.caller_not_bound
+
+
+def request_digest(req) -> str:
+    """What a caller's proof covers: the request, not the cart the host will capture."""
+    return hash_value({"spoke_id": req.spoke_id, "intent_id": req.intent_id, "merchant_ref": req.merchant_ref, "adapter_id": req.adapter_id,
+                       "cart_ref": req.cart_ref, "destination_ref": req.destination_ref, **({"rail_id": req.rail_id} if req.rail_id else {})})
 
 
 @dataclass
@@ -83,9 +96,9 @@ class Pending:
 
 
 class Flow:
-    def __init__(self, ledger: Ledger, profile: ProfileStore, keylog: KeyLog, clock: Clock, rng, *, evaluator_digest: str,
+    def __init__(self, ledger: Ledger, profile: ProfileStore, keylog: KeyLog, identity: Identity, clock: Clock, rng, *, evaluator_digest: str,
                  max_pending_age_s: int = 3600, refund_stall_s: int = 3 * 86400) -> None:
-        self.ledger, self.profile, self.keylog, self.clock, self.rng = ledger, profile, keylog, clock, rng
+        self.ledger, self.profile, self.keylog, self.identity, self.clock, self.rng = ledger, profile, keylog, identity, clock, rng
         self.signer = keylog.signer
         self.evaluator_digest = evaluator_digest
         self.money = MoneyInFlight(ledger, self.signer, clock, rng)
@@ -113,9 +126,9 @@ class Flow:
                                             "document_hash": hash_value(encode(doc)), "document_ref": ref,
                                             "at": format_ts(self.clock.now())}, self.signer, record_id=rid)
 
-    def enrol_surface(self, wheel_id: str, surface) -> None:
-        self.keylog.enrol(surface.key_id, role="surface", principal_ref=self.deployments[wheel_id].wheel.payer_ref,
-                          public_key=surface.signer.public_jwk, protection_class="software", enrolled_by="reference")
+    def _wheel(self, dep: Deployment) -> Wheel:
+        """The wheel as evaluated: suspended while a surface key is compromised (07 §2, 01 §5)."""
+        return replace(dep.wheel, status="suspended") if self.identity.wheel_suspended(dep.wheel.payer_ref) else dep.wheel
 
     # --- helpers ----------------------------------------------------------------------------
 
@@ -142,6 +155,7 @@ class Flow:
         host = [
             Fact("merchant.rails_offered", adapter.describe().rails_offered, "host", True, "capturer_signed"),
             Fact("findings.open_on_spoke", self.recon.open_tap_findings_by_spoke(dep.wheel.wheel_id).get(req.spoke_id, 0), "host", True, "injected"),
+            Fact("recovery.pending", self.identity.recovery_pending(dep.wheel.payer_ref), "host", True, "injected"),
         ]
         names = {f.name for f in host + list(extra)}
         return FactSet([f for f in req.facts if f.name not in names] + host + list(extra))
@@ -158,7 +172,7 @@ class Flow:
         at = self.clock.now()
         inp = EvaluationInput(
             det_id, Proposal(pid, dep.wheel.wheel_id, req.spoke_id, req.caller.caller_id, req.intent_id, body), req.caller,
-            dep.wheel, dep.spokes, dep.ctx["tier0_rules"], dep.ctx["jurisdiction_rules"], dep.ctx["jurisdiction"], dep.ctx["rails"],
+            self._wheel(dep), dep.spokes, dep.ctx["tier0_rules"], dep.ctx["jurisdiction_rules"], dep.ctx["jurisdiction"], dep.ctx["rails"],
             dep.ctx["params"], facts, self._usage(dep, req.spoke_id, at), at,
             {"wheel": dep.wheel.version, "spoke": dep.spokes[req.spoke_id].version if req.spoke_id in dep.spokes else 0,
              "tier0": 1, "mapping": dep.ctx.get("mapping_ref", "unknown"), "evaluator": self.evaluator_digest}, **kw)
@@ -172,7 +186,15 @@ class Flow:
 
     # --- propose ----------------------------------------------------------------------------
 
-    def propose(self, wheel_id: str, req: ProposalRequest):
+    def propose(self, wheel_id: str, req: ProposalRequest, proof: dict):
+        dep = self.deployments[wheel_id]
+        try:  # who is proposing, proven; a claimed name never reaches the evaluator
+            caller = self.identity.authenticate_proposal(proof, payer_ref=dep.wheel.payer_ref, intent_id=req.intent_id, digest=request_digest(req))
+        except IdentityError as e:
+            return Rejected(e.reason if e.reason.startswith("sys.") else "sys.proof_invalid")
+        return self._propose_authenticated(wheel_id, replace(req, caller=caller))
+
+    def _propose_authenticated(self, wheel_id: str, req: ProposalRequest):
         dep = self.deployments[wheel_id]
         body, view = self._body(dep, req)
         pid = new_id("prp", clock=self.clock, rng=self.rng)
@@ -204,20 +226,45 @@ class Flow:
         self.proposals[pid] = p
         return p
 
+    def _repropose(self, wheel_id: str, req: ProposalRequest):
+        """Re-present after drift: the same authenticated caller, a derived intent, the cart as it is now."""
+        return self._propose_authenticated(wheel_id, req)
+
     # --- the payer's actions --------------------------------------------------------------------
 
-    def _verify(self, p: Pending, assertion: dict, action: str, subject: str) -> None:
-        dep = self.deployments[p.wheel_id]
-        key = self.keylog.state().get(assertion.get("surface_key_id"))
-        if (key is None or key.principal_role != "surface" or key.status != "active" or key.principal_ref != dep.wheel.payer_ref
-                or assertion.get("action") != action or assertion.get("proposal_id") != p.proposal_id
-                or assertion.get("subject_hash") != subject or not check(assertion, key.public_key)):
-            raise FlowError("assertion refused: wrong key, action, proposal, subject or signature")
+    @staticmethod
+    def subject(p: Pending, action: str, overridden: list[str] | None = None) -> str:
+        det = p.determination
+        if action == "override":
+            return hash_value({"presented_hash": det.presented_hash, "overridden": sorted(overridden or [])})
+        return det.presented_hash or det.proposal_hash
 
-    def _record_assertion(self, p: Pending, assertion: dict) -> str:
-        aid = new_id("asr", clock=self.clock, rng=self.rng)
-        self.ledger.append(p.wheel_id, {"record_type": "surface_assertion", "assertion_id": aid, **assertion}, self.signer, record_id=aid)
-        return aid
+    def challenge(self, proposal_id: str, action: str, overridden: list[str] | None = None) -> dict:
+        """What the payer's device signs: issued when the proposal is presented (07 §3)."""
+        p = self.proposals[proposal_id]
+        payer = self.deployments[p.wheel_id].wheel.payer_ref
+        return self.identity.challenge(payer_ref=payer, action=action, subject_hash=self.subject(p, action, overridden))
+
+    def _verify(self, p: Pending, assertion: dict, action: str, overridden: list[str] | None = None) -> dict:
+        dep = self.deployments[p.wheel_id]
+        det = p.determination
+        required = {"override": "auth.strength.override"}.get(action)
+        try:
+            info = self.identity.verify_assertion(assertion, payer_ref=dep.wheel.payer_ref, action=action,
+                                                  subject_hash=self.subject(p, action, overridden), required=required)
+        except IdentityError as e:
+            raise FlowError(f"assertion refused: {e}") from None
+        rail = dep.ctx["rails"].get(det.rail_id)
+        info["no_auth_rail_ok"] = bool(rail) and self.identity._rank(info["strength"]) >= self.identity._rank(self.identity.params["auth.strength.no_auth_rail"])
+        info["subject_hash"] = self.subject(p, action, overridden)
+        return info
+
+    def _record_assertion(self, p: Pending, info: dict, action: str) -> str:
+        self.ledger.append(p.wheel_id, {"record_type": "surface_assertion", "assertion_id": info["assertion_id"], "action": action,
+                                        "proposal_id": p.proposal_id, "subject_hash": info["subject_hash"], "surface_key_id": info["key_id"],
+                                        "auth_strength_achieved": info["strength"], "occurred_at": format_ts(self.clock.now())},
+                           self.signer, record_id=info["assertion_id"])
+        return info["assertion_id"]
 
     def _resolve(self, p: Pending, det_id: str, state: str, by: str, assertion_id=None, overridden=None, superseded_by=None) -> dict:
         rid = new_id("res", clock=self.clock, rng=self.rng)
@@ -241,21 +288,21 @@ class Flow:
         p = self._get(proposal_id, "awaiting_approval")
         if p.determination.outcome != "allow":
             raise FlowError("a refused proposal can only be overridden, not approved")
-        self._verify(p, assertion, "authorise", p.determination.presented_hash)
-        return self._authorise(p, "approved", self._record_assertion(p, assertion))
+        info = self._verify(p, assertion, "authorise")
+        return self._authorise(p, "approved", self._record_assertion(p, info, "authorise"), no_auth_rail_ok=info["no_auth_rail_ok"])
 
     def override(self, proposal_id: str, clause_ids: list[str], assertion: dict):
         p = self._get(proposal_id, "awaiting_approval")
         if not can_override(p.determination, clause_ids):
             raise FlowError("only payer-authored clauses can be overridden, and every failing clause must be named")
-        subject = hash_value({"presented_hash": p.determination.presented_hash, "overridden": sorted(clause_ids)})
-        self._verify(p, assertion, "override", subject)
-        return self._authorise(p, "approved_with_override", self._record_assertion(p, assertion), set(clause_ids))
+        info = self._verify(p, assertion, "override", clause_ids)
+        return self._authorise(p, "approved_with_override", self._record_assertion(p, info, "override"), set(clause_ids),
+                               no_auth_rail_ok=info["no_auth_rail_ok"])
 
     def decline(self, proposal_id: str, assertion: dict) -> Pending:
         p = self._get(proposal_id, "awaiting_approval", "notice")
-        self._verify(p, assertion, "decline", p.determination.presented_hash or p.determination.proposal_hash)
-        self._resolve(p, p.determination.determination_id, "declined", "payer", self._record_assertion(p, assertion))
+        info = self._verify(p, assertion, "decline")
+        self._resolve(p, p.determination.determination_id, "declined", "payer", self._record_assertion(p, info, "decline"))
         p.status = "declined"
         return p
 
@@ -275,6 +322,7 @@ class Flow:
                 out.append(p)
             elif p.status == "notice" and now >= p.notice_until:
                 out.append(self._authorise(p, "proceeded_on_silence", None))
+        self.identity.tick()  # delayed recoveries that are due
         if sweep:
             for wid, dep in self.deployments.items():
                 self.recon.sweep(wid, dep.adapters, dep.bank, trigger="scheduled")
@@ -282,7 +330,7 @@ class Flow:
 
     # --- stage 2, hold, execute, reconcile ------------------------------------------------------------
 
-    def _authorise(self, p: Pending, kind: str, assertion_id: str | None, overridden: set = frozenset()):
+    def _authorise(self, p: Pending, kind: str, assertion_id: str | None, overridden: set = frozenset(), *, no_auth_rail_ok: bool = False):
         dep = self.deployments[p.wheel_id]
         req, det1 = p.request, p.determination
         body, _view = self._body(dep, req)
@@ -297,7 +345,7 @@ class Flow:
             return p
         if not ok:
             if any(c.rule_id == "sys.drift" for c in det2.failing_clauses):
-                new = self.propose(p.wheel_id, replace(req, intent_id=f"{req.intent_id}:re{len(p.events)}"))
+                new = self._repropose(p.wheel_id, replace(req, intent_id=f"{req.intent_id}:re{len(p.events)}"))
                 self._resolve(p, det2.determination_id, "superseded", "system", superseded_by=getattr(new, "proposal_id", None))
                 p.status, p.result = "superseded", new
                 return new  # re-presented to the payer
@@ -319,7 +367,7 @@ class Flow:
             return p
         rail = dep.ctx["rails"].get(det2.rail_id)
         auth = (Authorisation("standing_instruction") if kind == "proceeded_on_silence"
-                else Authorisation("payer_approval", no_auth_rail_ok=True, overridden=frozenset(overridden)))
+                else Authorisation("payer_approval", no_auth_rail_ok=no_auth_rail_ok, overridden=frozenset(overridden)))
         try:
             if rail is None:
                 raise ExecutionRefused("no rail")
