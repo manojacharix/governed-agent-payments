@@ -14,6 +14,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from gap_adapters.execute import Authorisation, ExecutionRefused, Executor
+from gap_adapters.interface import MerchantError
+from gap_core.canonical import CanonicalError
 from gap_core.authority import Caller, Spoke, Wheel
 from gap_core.clock import Clock
 from gap_core.codec import encode
@@ -43,6 +45,21 @@ class Rejected:
     """A proposal refused before evaluation: the caller could not prove who it is (07 §4.2)."""
 
     reason: str  # sys.proof_invalid | sys.proof_stale | sys.nonce_reused | sys.caller_not_bound
+
+
+@dataclass(frozen=True)
+class Invalid:
+    """A proposal the host could not even build: unknown adapter, a cart the merchant cannot return, or a cart that
+    breaks the money model (mixed currencies, totals beyond 2^53, malformed strings). Nothing is recorded."""
+
+    code: str  # unknown_adapter | cart_unavailable | cart_invalid
+    detail: str = ""
+
+
+class _CartProblem(Exception):
+    def __init__(self, code: str, detail: str = "") -> None:
+        super().__init__(f"{code}: {detail}")
+        self.code, self.detail = code, detail
 
 
 def request_digest(req) -> str:
@@ -164,11 +181,25 @@ class Flow:
         return FactSet([f for f in req.facts if f.name not in names] + host + list(extra))
 
     def _body(self, dep: Deployment, req: ProposalRequest) -> tuple[ProposalBody, object]:
-        view = dep.adapters[req.adapter_id].get_cart(req.cart_ref)  # the host captures the cart itself (02 step 1)
-        extras_total = sum(e.amount.amount_minor for e in req.extras if e.amount is not None)
-        body = ProposalBody(req.merchant_ref, req.adapter_id, req.cart_ref, view.lines, Money(view.total.amount_minor + extras_total, view.total.currency),
-                            req.destination_ref, req.agent_confidence, fees=view.fees, extras=req.extras, rail_id=req.rail_id,
-                            substitution_allowed=req.substitution_allowed)
+        """The host captures the cart itself (02 step 1). Anything the merchant returns that the model cannot hold is a
+        _CartProblem, never a crash: the merchant is outside the trust boundary."""
+        adapter = dep.adapters.get(req.adapter_id)
+        if adapter is None:
+            raise _CartProblem("unknown_adapter", req.adapter_id)
+        try:
+            view = adapter.get_cart(req.cart_ref)
+        except (KeyError, MerchantError) as e:
+            raise _CartProblem("cart_unavailable", str(e)) from None
+        except (ValueError, TypeError, ArithmeticError) as e:
+            raise _CartProblem("cart_invalid", str(e)) from None
+        try:
+            extras_total = sum(e.amount.amount_minor for e in req.extras if e.amount is not None)
+            body = ProposalBody(req.merchant_ref, req.adapter_id, req.cart_ref, view.lines, Money(view.total.amount_minor + extras_total, view.total.currency),
+                                req.destination_ref, req.agent_confidence, fees=view.fees, extras=req.extras, rail_id=req.rail_id,
+                                substitution_allowed=req.substitution_allowed)
+            encode(body)  # every string and number must be representable before anything is recorded
+        except (ValueError, TypeError, ArithmeticError, CanonicalError) as e:
+            raise _CartProblem("cart_invalid", str(e)) from None
         return body, view
 
     def _evaluate(self, dep: Deployment, pid: str, det_id: str, req: ProposalRequest, body: ProposalBody, facts: FactSet, **kw) -> tuple[Determination, EvaluationInput]:
@@ -199,7 +230,10 @@ class Flow:
 
     def _propose_authenticated(self, wheel_id: str, req: ProposalRequest):
         dep = self.deployments[wheel_id]
-        body, view = self._body(dep, req)
+        try:
+            body, view = self._body(dep, req)
+        except _CartProblem as e:
+            return Invalid(e.code, e.detail)
         pid = new_id("prp", clock=self.clock, rng=self.rng)
         at = self.clock.now()
         window = timedelta(seconds=dep.ctx["params"].duplicate_window_s)
@@ -336,7 +370,12 @@ class Flow:
     def _authorise(self, p: Pending, kind: str, assertion_id: str | None, overridden: set = frozenset(), *, no_auth_rail_ok: bool = False):
         dep = self.deployments[p.wheel_id]
         req, det1 = p.request, p.determination
-        body, _view = self._body(dep, req)
+        try:
+            body, _view = self._body(dep, req)
+        except _CartProblem as e:  # the cart vanished or went bad since it was shown: refuse, recorded, never execute
+            self._resolve(p, det1.determination_id, "declined", "system")
+            p.status, p.result = "refused", Invalid(e.code, e.detail)
+            return p
         extra = (Fact("notice.delivered", p.notice_delivered, "host", True, "injected"),) if kind == "proceeded_on_silence" else ()
         det2, inp2 = self._evaluate(dep, p.proposal_id, new_id("det", clock=self.clock, rng=self.rng), req, body,
                                     self._host_facts(dep, req, extra), stage="authorisation", authorised_presented_hash=det1.presented_hash)

@@ -1,4 +1,4 @@
-.PHONY: test demo demo-phase1 evaluate mappings ledger simulate execute evidence identity interfaces
+.PHONY: test demo stress demo-phase1 evaluate mappings ledger simulate execute evidence identity interfaces
 
 test:
 	uv run pytest
@@ -32,3 +32,6 @@ interfaces:
 
 demo:
 	uv run python tools/demo.py
+
+stress:
+	uv run python tools/stress.py 2 1500

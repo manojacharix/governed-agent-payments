@@ -565,6 +565,14 @@ Handover (old wheel chain, last record) {
 - **The timeline follows chain order** and names, for every failing clause, the rule, its dimension, its author and whether the payer may override it.
 - **`make demo` is snapshot-tested.** Random IDs and hashes are normalised to stable placeholders; any other change to the story's output fails the test until accepted with `UPDATE_GOLDEN=1`.
 
+### 10.6 Fixed in the stress campaign (plan/stress_campaign.md)
+- **Agent input is exact.** Strings are str, 1 to 128 characters, with no control or surrogate characters; `agent_confidence` is an int from 0 to 1000 with no coercion; at most 32 facts, each `{name, value, source?}` with a dotted lower-case name, no repeats, canonical value of at most 4 KB. Request bodies are at most 64 KB.
+- **The canonical model refuses U+0000 and unpaired surrogates** in every string and key, and nesting deeper than 32.
+- **The merchant is outside the trust boundary.** An unknown adapter, a cart the merchant cannot return, or a cart that breaks the money model (mixed currencies, totals beyond 2^53, unrepresentable strings) is refused at proposal with nothing recorded, and at authorisation as declined by the system. One bad cart never stops the tick for anyone else.
+- **A capped spoke has no room in a currency it has no cap for.**
+- **One host process serialises every call into the flow** under one lock. Running several processes needs proposal, challenge and token state in Postgres first.
+- **Enrolment checks before the payer is asked:** the OAuth client exists, the key parses as P-256. Redirect URIs are https or loopback.
+
 ## 11. Profile store and data keys (`07` §8)
 
 ```

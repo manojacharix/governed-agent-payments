@@ -47,6 +47,33 @@ BEHAVIOURS = (["ok"] * 76 + ["decline"] * 5 + ["timeout_after_create"] * 4 + ["t
               + ["processing"] * 2 + ["overcharge"] * 3 + ["substitute"] * 2 + ["error_after_create:RATE_LIMITED"] * 2)
 
 
+DEFAULT = {
+    "behaviours": BEHAVIOURS, "start": START,
+    "price_scale": 1, "cap_scale": 1,            # multiply item prices / caps and budgets
+    "bank_prompt": 0.9, "bank_wrong": 0.02,      # share of debits recorded at once; share recorded with a wrong amount
+    "merchant_confirms": 0.95, "refund_rate": 0.05, "refund_completes": 0.8,
+    "identity_rate": 0.003, "intruder_rate": 0.03, "direct_rate": 0.01, "unverified_category": 0.05,
+    "approve": 0.85, "decline": 0.07, "override": 0.5, "notice_delivered": 0.9,
+}
+
+# Extreme profiles for the stress campaign (tools/stress.py). Each pushes one or more variables to an edge.
+PROFILES = {
+    "default": {},
+    "hostile_merchants": {"behaviours": ["ok"] * 20 + ["decline"] * 10 + ["timeout_after_create"] * 15 + ["timeout_before_create"] * 10
+                          + ["error:RATE_LIMITED"] * 10 + ["processing"] * 10 + ["overcharge"] * 10 + ["substitute"] * 10
+                          + ["error_after_create:RATE_LIMITED"] * 5},
+    "chaotic_bank": {"bank_prompt": 0.3, "bank_wrong": 0.4, "merchant_confirms": 0.6, "refund_rate": 0.4, "refund_completes": 0.3},
+    "identity_storm": {"identity_rate": 0.08, "intruder_rate": 0.3},
+    # 23:15 in Kolkata, minutes before November, with caps tight enough that the monthly reset matters
+    "month_boundary": {"start": datetime(2026, 10, 31, 17, 45, tzinfo=timezone.utc), "cap_scale": 0.15},
+    "burst": {"minutes_per_event": 1},  # a proposal about every minute: duplicate windows, notices and expiries overlap
+    "whales": {"price_scale": 10**7, "cap_scale": 10**7},  # carts and caps near the 2^53 minor-unit ceiling
+    "pennies": {"price_scale": 1, "cap_scale": 0.001},      # caps of a few rupees: almost everything hits a cap
+    "unresponsive_payer": {"approve": 0.05, "decline": 0.05, "override": 0.05, "notice_delivered": 0.1},
+    "all_unverified": {"unverified_category": 1.0},
+}
+
+
 def inr(x: int) -> Money:
     return Money(x, "INR")
 
@@ -82,9 +109,10 @@ class Report:
 
 
 class FlowSimulation:
-    def __init__(self, ledger_conn, profile_conn, seed: int, payers: int) -> None:
+    def __init__(self, ledger_conn, profile_conn, seed: int, payers: int, profile: dict | None = None) -> None:
         self.rng, self.seed = random.Random(seed), seed
-        self.clock = FixedClock(START)
+        self.k = {**DEFAULT, **(profile or {})}
+        self.clock = FixedClock(self.k["start"])
         self.ledger = Ledger(ledger_conn)
         self.host = LocalSigner.generate("key_sim_host")
         self.keylog = KeyLog(self.ledger, "sim", self.host, self.clock)
@@ -97,8 +125,9 @@ class FlowSimulation:
                          random.Random(seed + 1), evaluator_digest=self.digest, max_pending_age_s=6 * 3600, refund_stall_s=5 * 86400)
         self.intruder = KeyAgent("key_intruder", self.clock)
         self.intruder.caller_id = "clr_never_enrolled"
-        self.blocked: list = []      # (payer_ref, start, end or None): suspended or recovering
-        self.executed_at: list = []  # (payer_ref, time, proposal_id)
+        self.blocked: list = []      # [payer_ref, start_seq, end_seq or None, why]: suspended or recovering
+        self.executed_at: list = []  # (payer_ref, seq, proposal_id)
+        self.seq = 0                 # orders events within one simulated minute (a tick runs before the step)
         self.ctx = {k: {**evaluation_context(india, load_tier0(ROOT / f"tier0/examples/{f}.yaml", india)), "mapping_ref": india.ref}
                     for k, f in (("personal", "personal_in"), ("b2b", "b2b_procurement_in"))}
         self.month = Window("calendar_month", "Asia/Kolkata")
@@ -128,7 +157,9 @@ class FlowSimulation:
 
     def _payer(self, i: int) -> Payer:
         r, wid, pyr = self.rng, f"whl_{i:04d}", f"pyr_{i:04d}"
-        ago, until = START - timedelta(days=30), START + timedelta(days=365)
+        start = self.k["start"]
+        ago, until = start - timedelta(days=30), start + timedelta(days=365)
+        cs = lambda x: max(1, int(x * self.k["cap_scale"]))  # noqa: E731
         idn = self.identity
         device, spare = Device(f"key_dev_{i}"), Device(f"key_spare_{i}")
         idn.enrol_first_surface(pyr, device.key_id, device.public_jwk)
@@ -142,21 +173,21 @@ class FlowSimulation:
             ins = StandingInstruction("mrc_grocer", "fake", (CartLineTemplate("item_milk", 2), CartLineTemplate("item_bread", 1)), "dst_home",
                                       "in:merchant_wallet", 1000, inr(19_500))
             session, sched = self._enrol_session(pyr, device), self._enrol_key(pyr, device, f"key_sched_{i}")
-            spokes = {f"{wid}_grocery": Spoke(f"{wid}_grocery", wid, "explicit_tap", ago, until, callers=(session["caller_id"],), caps=(Limit(inr(r.randint(10, 40) * 100_000), self.month),),
+            spokes = {f"{wid}_grocery": Spoke(f"{wid}_grocery", wid, "explicit_tap", ago, until, callers=(session["caller_id"],), caps=(Limit(inr(cs(r.randint(10, 40) * 100_000)), self.month),),
                                               rules=(rule(f"{wid}.max_three_lines", "items", max_lines=3),)),  # payer-authored: overridable
-                      f"{wid}_travel": Spoke(f"{wid}_travel", wid, "explicit_tap", ago, until, callers=(session["caller_id"],), caps=(Limit(inr(r.randint(20, 80) * 100_000), self.month),)),
-                      f"{wid}_repeat": Spoke(f"{wid}_repeat", wid, "silent_with_notice", ago, until, callers=(sched.caller_id,), instruction=ins, caps=(Limit(inr(2_000_000), self.month),))}
+                      f"{wid}_travel": Spoke(f"{wid}_travel", wid, "explicit_tap", ago, until, callers=(session["caller_id"],), caps=(Limit(inr(cs(r.randint(20, 80) * 100_000)), self.month),)),
+                      f"{wid}_repeat": Spoke(f"{wid}_repeat", wid, "silent_with_notice", ago, until, callers=(sched.caller_id,), instruction=ins, caps=(Limit(inr(cs(2_000_000)), self.month),))}
             agents = {f"{wid}_grocery": session, f"{wid}_travel": session, f"{wid}_repeat": sched}
-            wheel = Wheel(wid, pyr, "in", budgets=(Limit(inr(r.randint(30, 200) * 100_000), self.month),))
+            wheel = Wheel(wid, pyr, "in", budgets=(Limit(inr(cs(r.randint(30, 200) * 100_000)), self.month),))
             leaves = list(spokes)
         else:
             kind = "b2b"
             buyer = self._enrol_key(pyr, device, f"key_buyer_{i}")
-            spokes = {f"{wid}_company": Spoke(f"{wid}_company", wid, "explicit_tap", ago, until, caps=(Limit(inr(50_000_000), self.month),)),
-                      f"{wid}_team": Spoke(f"{wid}_team", wid, "explicit_tap", ago, until, parent_id=f"{wid}_company", caps=(Limit(inr(15_000_000), self.month),)),
-                      f"{wid}_agent": Spoke(f"{wid}_agent", wid, "explicit_tap", ago, until, parent_id=f"{wid}_team", callers=(buyer.caller_id,), caps=(Limit(inr(4_000_000), self.month),))}
+            spokes = {f"{wid}_company": Spoke(f"{wid}_company", wid, "explicit_tap", ago, until, caps=(Limit(inr(cs(50_000_000)), self.month),)),
+                      f"{wid}_team": Spoke(f"{wid}_team", wid, "explicit_tap", ago, until, parent_id=f"{wid}_company", caps=(Limit(inr(cs(15_000_000)), self.month),)),
+                      f"{wid}_agent": Spoke(f"{wid}_agent", wid, "explicit_tap", ago, until, parent_id=f"{wid}_team", callers=(buyer.caller_id,), caps=(Limit(inr(cs(4_000_000)), self.month),))}
             agents = {f"{wid}_agent": buyer}
-            wheel = Wheel(wid, pyr, "in", budgets=(Limit(inr(r.randint(20, 60) * 10_000_000), self.month),))
+            wheel = Wheel(wid, pyr, "in", budgets=(Limit(inr(cs(r.randint(20, 60) * 10_000_000)), self.month),))
             leaves = [f"{wid}_agent"]
         m = FakeMerchant(r.choice("ab"), self.clock)
         bank = BankFeed()
@@ -168,7 +199,7 @@ class FlowSimulation:
     def _request(self, p: Payer, n: int):
         r, m, reasons = self.rng, p.merchant, set()
         spoke_id = r.choice(p.leaves)
-        if r.random() < 0.03:
+        if r.random() < self.k["intruder_rate"]:
             reasons.add("wrong_caller")
         cart = f"{p.wheel_id}-cart-{n}"
         if spoke_id.endswith("_repeat"):
@@ -177,13 +208,13 @@ class FlowSimulation:
             merchant, category, intent = "mrc_grocer", "std:mcc:5411", f"si:{spoke_id}:{n}"
         else:
             merchant, category = r.choice(MERCHANTS)
-            scale = 50 if p.kind == "b2b" else 1
+            scale = (50 if p.kind == "b2b" else 1) * self.k["price_scale"]
             m.add_cart(cart, tuple(CartLine(f"item_{r.randint(1, 60)}", r.randint(1, 3), inr(r.randint(20, 1500) * 100 * scale)) for _ in range(r.randint(1, 4))),
                        (Fee("delivery", inr(r.choice([0, 2000, 4000]))),))
             intent = f"intent-{n}"
             if p.kind == "personal" and merchant in BLOCKED_FOR_PERSONAL:
                 reasons.add("blocked_category")
-        verified = r.random() < 0.95
+        verified = r.random() >= self.k["unverified_category"]
         facts = [Fact("merchant.categories", TermSet(frozenset({category}), "std:mcc@1", "fake@1"), "merchant_adapter", verified, "capturer_signed")]
         if p.kind == "b2b":
             x = r.random()
@@ -204,7 +235,7 @@ class FlowSimulation:
         req, reasons = self._request(p, n)
         script = []
         for _ in range(3):
-            b = r.choice(BEHAVIOURS)
+            b = r.choice(self.k["behaviours"])
             script.append(f"overcharge:{r.randint(100, 50_000)}" if b == "overcharge" else b)
         p.merchant.script = script
         res = self.flow.propose(p.wheel_id, req, self._proof(p, req, intruder="wrong_caller" in reasons))
@@ -222,23 +253,23 @@ class FlowSimulation:
         if reasons:
             self.adversarial[res.proposal_id] = reasons
         if res.status == "notice":
-            if r.random() < 0.9:
+            if r.random() < self.k["notice_delivered"]:
                 self.flow.notice_delivered(res.proposal_id)
             if r.random() < 0.05:
                 self._act(p, res, "decline")
         elif res.status == "awaiting_approval":
             x = r.random()
             if res.determination.outcome == "refuse":
-                if x < 0.5:
+                if x < self.k["override"]:
                     self._act(p, res, "override")
-            elif x < 0.85:
+            elif x < self.k["approve"]:
                 self._act(p, res, "authorise")
-            elif x < 0.92:
+            elif x < self.k["approve"] + self.k["decline"]:
                 self._act(p, res, "decline")
             # else: the payer ignores it and it expires
-        if r.random() < 0.003:
+        if r.random() < self.k["identity_rate"]:
             self._identity_event(r.choice(self.payers))
-        if r.random() < 0.01:  # someone orders directly at the merchant, outside the layer
+        if r.random() < self.k["direct_rate"]:  # someone orders directly at the merchant, outside the layer
             p.merchant.add_cart(f"direct-{n}", (CartLine("item_direct", 1, inr(5000)),))
             saved, p.merchant.script = p.merchant.script, ["ok"]
             o = p.merchant.place(f"direct-{n}", p.merchant.describe().rails_offered[0], f"direct-{n}", "dst_home")
@@ -274,14 +305,15 @@ class FlowSimulation:
     def _bank_follow_up(self, p: Payer, out) -> None:
         """The bank records debits for paid orders: usually at once, sometimes late, occasionally wrong."""
         if getattr(out, "status", None) == "executed" and getattr(out, "proposal_id", None):
-            self.executed_at.append((p.payer_ref, self.clock.now(), out.proposal_id))
+            self.seq += 1
+            self.executed_at.append((p.payer_ref, self.seq, out.proposal_id))
         res = getattr(out, "result", None)
         if getattr(out, "status", None) != "executed" or res is None or not res.merchant_order_ref:
             return
         m, r = p.merchant, self.rng
         o = m.get_order(res.merchant_order_ref)
         if o.status == "PENDING_PAYMENT":
-            if r.random() < 0.95:
+            if r.random() < self.k["merchant_confirms"]:
                 m.confirm_payment(o.merchant_order_ref)
                 o = m.get_order(o.merchant_order_ref)
             else:
@@ -289,13 +321,14 @@ class FlowSimulation:
         if o.charged is None:
             return
         x = r.random()
-        amount = o.charged if x < 0.98 else inr(o.charged.amount_minor + 1)
-        if x < 0.9 or x >= 0.98:
+        wrong_from = 1 - self.k["bank_wrong"]
+        amount = o.charged if x < wrong_from else inr(o.charged.amount_minor + 1)
+        if x < self.k["bank_prompt"] or x >= wrong_from:
             p.bank.debit(f"bank-{o.merchant_order_ref}", o.merchant_order_ref, amount, self.clock.now())
         else:
             self.late_debits.append((self.clock.now() + timedelta(hours=r.randint(1, 10)), p.bank, o.merchant_order_ref, amount))
-        if r.random() < 0.05:
-            m.refund(o.merchant_order_ref, inr(r.randint(1, o.charged.amount_minor)), completes=r.random() < 0.8)
+        if r.random() < self.k["refund_rate"]:
+            m.refund(o.merchant_order_ref, inr(r.randint(1, o.charged.amount_minor)), completes=r.random() < self.k["refund_completes"])
 
     def _identity_event(self, p: Payer) -> None:
         """A device is reported compromised (resumed later from the spare), or the payer recovers to a new phone."""
@@ -304,7 +337,8 @@ class FlowSimulation:
             return
         if self.rng.random() < 0.5 and p.spare is not p.device:  # resuming needs a second, uncompromised device
             idn.report_compromise(p.device.key_id, now)
-            self.blocked.append([p.payer_ref, now, None, "suspended"])
+            self.seq += 1
+            self.blocked.append([p.payer_ref, self.seq, None, "suspended", now])
             rep.actions["device_compromised"] += 1
         else:
             new = Device(f"key_new_{p.payer_ref}_{rep.actions['recovery']}")
@@ -313,7 +347,8 @@ class FlowSimulation:
                                    answers=["first answer", "second answer", "third answer"], external_verified=True)
             except IdentityError:
                 return
-            self.blocked.append([p.payer_ref, now, None, "recovering"])
+            self.seq += 1
+            self.blocked.append([p.payer_ref, self.seq, None, "recovering", now])
             p.device, p.spare = new, new
             rep.actions["recovery"] += 1
 
@@ -323,13 +358,15 @@ class FlowSimulation:
             if b[2] is not None:
                 continue
             p = next(x for x in self.payers if x.payer_ref == b[0])
-            if b[3] == "suspended" and now - b[1] > timedelta(hours=6):
+            if b[3] == "suspended" and now - b[4] > timedelta(hours=6):
                 from gap_core.hashing import hash_value as _h
                 idn.resume(p.payer_ref, p.spare.respond(idn.challenge(payer_ref=p.payer_ref, action="wheel_event", subject_hash=_h({"resume": p.payer_ref}))))
                 p.device = p.spare
-                b[2] = now
+                self.seq += 1
+                b[2] = self.seq
             elif b[3] == "recovering" and not idn.recovery_pending(p.payer_ref):
-                b[2] = now
+                self.seq += 1
+                b[2] = self.seq
 
     def _due(self) -> None:
         now = self.clock.now()
@@ -345,6 +382,7 @@ class FlowSimulation:
     # --- the run and the checks -----------------------------------------------------------------
 
     def run(self, events: int, minutes_per_event: int, bundles: int = 25) -> Report:
+        minutes_per_event = self.k.get("minutes_per_event", minutes_per_event)
         for n in range(events):
             self.clock.advance(timedelta(minutes=self.rng.randint(1, 2 * minutes_per_event)))
             self._due()
@@ -352,6 +390,7 @@ class FlowSimulation:
             for out in self.flow.tick(sweep=n % 50 == 0):
                 if getattr(out, "status", None) == "executed":
                     self._bank_follow_up(next(p for p in self.payers if p.wheel_id == out.wheel_id), out)
+            self._unblock()  # the tick may have completed a delayed recovery
             self.step(n)
         self.clock.advance(timedelta(days=10))
         self._due()
@@ -367,9 +406,9 @@ class FlowSimulation:
 
     def _check(self, n_bundles: int) -> None:
         rep, v, led = self.report, self.report.violations, self.ledger
-        for payer_ref, start, end, why in self.blocked:  # nothing executes while a payer is suspended or recovering
+        for payer_ref, start, end, why, _at in self.blocked:  # nothing executes while a payer is suspended or recovering
             for pr, t, pid in self.executed_at:
-                if pr == payer_ref and start <= t and (end is None or t < end):
+                if pr == payer_ref and start < t and (end is None or t < end):
                     v.append(f"{pid}: executed while the payer was {why}")
         integrity = led.verify_integrity(self.keylog.public_keys())
         rep.records = integrity.records_checked
@@ -384,6 +423,18 @@ class FlowSimulation:
                     v.append(f"{pend.proposal_id}: executed despite {sorted(hard)}")
                 elif reasons & {"unverified_po_claim", "no_po", "blocked_category"}:
                     v.append(f"{pend.proposal_id}: overridden despite non-payer clauses {sorted(hard)}")
+        for p in self.payers:  # a hold is placed only when the account has room: held + spent <= limit, per window
+            dep = self.flow.deployments[p.wheel_id]
+            limits = {s.spoke_id: s.caps[0].limit.amount_minor for s in dep.spokes.values() if s.caps}
+            limits[p.wheel_id] = dep.wheel.budgets[0].limit.amount_minor
+            running: Counter = Counter()
+            sign = {"hold": 1, "capture": 0, "release": -1, "overcapture": 1, "refund": -1}
+            for r in led.records(p.wheel_id, "posting"):
+                key = (r["account_set"]["owner"], r["account_set"]["window_id"])
+                running[key] += sign[r["kind"]] * r["amount"]["amount_minor"]
+                if r["kind"] == "hold" and key[0] in limits and running[key] > limits[key[0]]:
+                    v.append(f"{r['payment_ref']}: hold took {key[0]} {key[1]} to {running[key]} over its limit {limits[key[0]]}")
+            rep.statuses["windows"] = max(rep.statuses.get("windows", 0), len({k[1] for k in running}))
         for p in self.payers:
             recs = led.records(p.wheel_id)
             res_by_det = {r["determination_id"]: r for r in recs if r["record_type"] == "resolution"}
@@ -441,5 +492,6 @@ class FlowSimulation:
                     v.append(f"{pend.proposal_id}: replay {result['replay']}")
 
 
-def run(ledger_conn, profile_conn, *, seed: int, payers: int, events: int, minutes_per_event: int = 15, bundles: int = 25) -> Report:
-    return FlowSimulation(ledger_conn, profile_conn, seed, payers).run(events, minutes_per_event, bundles)
+def run(ledger_conn, profile_conn, *, seed: int, payers: int, events: int, minutes_per_event: int = 15, bundles: int = 25,
+        profile: dict | None = None) -> Report:
+    return FlowSimulation(ledger_conn, profile_conn, seed, payers, profile).run(events, minutes_per_event, bundles)

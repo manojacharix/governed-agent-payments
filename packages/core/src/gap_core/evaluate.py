@@ -529,6 +529,8 @@ def _budget(inp: EvaluationInput, chain: list[Spoke], mode: str, ctx: _Ctx) -> N
     total = inp.proposal.body.total
     amount = total if mode == "explicit_tap" else _worst_case(chain[-1], total)
     for s in chain:
+        if s.caps and not any(c.limit.currency == amount.currency for c in s.caps):
+            ctx.sys("sys.cap_exceeded")  # a capped spoke has no room in a currency it has no cap for
         for cap in s.caps:
             if cap.limit.currency != amount.currency:
                 continue

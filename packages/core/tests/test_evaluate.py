@@ -527,3 +527,15 @@ def test_window_rejects_bad_shapes():
         Window("rolling", "Etc/UTC")
     with pytest.raises(ValueError):
         Window("calendar_month", "Etc/UTC", 10)
+
+
+
+def test_a_capped_spoke_has_no_room_in_a_currency_it_has_no_cap_for():
+    """Stress campaign: caps in another currency used to be skipped, so a second-currency budget bypassed them."""
+    from gap_core.authority import Limit, Wheel
+    from gap_core.money import Money
+    from gap_core.testing import MONTH, WHEEL, body, scenario
+    wheel = Wheel(WHEEL, "pyr_test", "xx", budgets=(Limit(Money(1500000, "XTS"), MONTH), Limit(Money(10**9, "XXX"), MONTH)))
+    det = evaluate(scenario(body=body("XXX"), wheel=wheel))  # the spoke is capped in XTS only
+    assert "sys.cap_exceeded" in [c.rule_id for c in det.failing_clauses]
+    assert evaluate(scenario(body=body("XTS"), wheel=wheel)).outcome != "refuse"

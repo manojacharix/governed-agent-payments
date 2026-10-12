@@ -136,3 +136,13 @@ def test_the_procurement_operator_runs_through_the_same_api(w):
     failing = {c["rule_id"]: c for c in rogue["determination"]["failing_clauses"]}
     assert {"op.po_matched", "op.approved_supplier"} <= set(failing)
     assert not failing["op.po_matched"]["overridable"]  # an operator clause: the payer cannot override it
+
+
+@pytest.mark.parametrize("bad", [{"intent_id": "a\x00b"}, {"agent_confidence": 5000}, {"cart_ref": "x" * 200}, {"cart_ref": "nope"}])
+def test_bad_mcp_proposals_return_errors_not_exceptions(w, bad):
+    w.merchant.add_cart("cart-1", LINES)
+    server = build_server(Host(w.flow), "whl_1", lambda i, d: bearer_proof(w.agent_token, w.clock))
+    args = {"spoke_id": "spk_grocery", "merchant_ref": "mrc_shop", "adapter_id": "fake-b", "cart_ref": "cart-1",
+            "destination_ref": "dst_home", "intent_id": "mcp-x", "agent_confidence": 950, **bad}
+    out = mcp_call(server, "propose_order", **args)
+    assert out["error"] in ("bad_request", "cart_unavailable")

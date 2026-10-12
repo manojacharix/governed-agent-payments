@@ -34,7 +34,7 @@ from gap_core.canonical import canonical
 from gap_core.clock import Clock
 from gap_core.hashing import hash_value
 from gap_core.ids import new_id
-from gap_core.signatures import SignatureError, b64url_decode, verify
+from gap_core.signatures import SignatureError, b64url_decode, public_key_from_jwk, verify
 from gap_core.timefmt import format_ts, parse_ts
 from gap_ledger.keylog import KeyLog
 from gap_ledger.ledger import Ledger
@@ -45,6 +45,8 @@ PROTECTION_RANK = {"software": 0, "hardware": 1, "hardware_attested": 2}
 UV_FACTOR = {"inherence": "inherence", "knowledge": "knowledge", "none": None}
 MAX_ANSWER_FAILURES, LOCKOUT = 5, timedelta(hours=24)
 
+
+MAX_NONCE = 128
 
 class IdentityError(RuntimeError):
     """An identity check failed. `reason` is a short machine-readable code."""
@@ -148,6 +150,8 @@ class Identity:
     def verify_assertion(self, assertion: dict, *, payer_ref: str, action: str, subject_hash: str,
                          required: str | None = None, roles: tuple = ("surface",)) -> dict:
         """Check an assertion against its challenge, key, signature and strength. Consumes the challenge."""
+        if not isinstance(assertion, dict) or not isinstance(assertion.get("challenge_id"), str):
+            raise IdentityError("no_challenge", "an assertion is an object naming its challenge")
         cid = assertion.get("challenge_id")
         ch = self.challenges.get(cid)
         if ch is None:
@@ -218,7 +222,13 @@ class Identity:
     # --- callers: enrolment, OAuth 2.1 + PKCE, proposal proofs -------------------------------------------
 
     def register_client(self, client_name: str, redirect_uri: str) -> str:
-        """Dynamic client registration. The name is a claim, recorded and never trusted."""
+        """Dynamic client registration. The name is a claim, recorded and never trusted. Redirects go to https, or to
+        loopback for native apps (RFC 8252); nothing else (javascript:, data:, plain http to a remote host)."""
+        if not isinstance(client_name, str) or not 1 <= len(client_name) <= 200 or "\x00" in client_name:
+            raise IdentityError("bad_request", "client_name must be 1 to 200 characters")
+        if not isinstance(redirect_uri, str) or len(redirect_uri) > 2048 or not (
+                redirect_uri.startswith("https://") or redirect_uri.startswith(("http://127.0.0.1", "http://localhost", "http://[::1]"))):
+            raise IdentityError("bad_request", "redirect_uri must be https, or loopback http")
         cid = f"cli_{secrets.token_hex(8)}"
         self.clients[cid] = {"claimed_name": client_name, "redirect_uri": redirect_uri}
         self._record({"record_type": "client_registration", "client_id": cid, "claimed_name_hash": hash_value(client_name)}, cid)
@@ -227,6 +237,13 @@ class Identity:
     def request_caller(self, payer_ref: str, *, client_id: str | None = None, public_jwk: dict | None = None) -> dict:
         if (client_id is None) == (public_jwk is None):
             raise IdentityError("bad_request", "a caller brings either a key (key_bound) or an OAuth client (session_bound)")
+        if client_id is not None and (not isinstance(client_id, str) or client_id not in self.clients):
+            raise IdentityError("unknown_client")
+        if public_jwk is not None:  # the payer must never be asked to approve a key that cannot verify anything
+            try:
+                public_key_from_jwk(public_jwk)
+            except Exception:
+                raise IdentityError("invalid_key", "not a P-256 public key") from None
         eid = new_id("enr", clock=self.clock, rng=self._rng)
         e = {"enrolment_id": eid, "payer_ref": payer_ref, "kind": "caller", "client_id": client_id, "public_jwk": public_jwk, "status": "pending"}
         e["subject_hash"] = hash_value({k: v for k, v in e.items() if k not in ("status",) and v is not None})
@@ -287,6 +304,10 @@ class Identity:
     def authenticate_proposal(self, proof: dict, *, payer_ref: str, intent_id: str, digest: str) -> Caller:
         """07 §4.2: who is proposing, proven. Returns the core Caller with its assurance, or raises with a sys.* reason."""
         now = self._now()
+        if not isinstance(proof, dict) or any(not isinstance(proof.get(k, ""), str) for k in ("format", "token", "caller_id", "nonce", "created_at", "value", "intent_id", "digest")):
+            raise IdentityError("sys.proof_invalid", "a proof is an object of strings")
+        if len(proof.get("nonce", "")) > MAX_NONCE or len(proof.get("token", "")) > 512:
+            raise IdentityError("sys.proof_invalid", "nonce or token too long")
         fmt = proof.get("format")
         if fmt == "bearer_session":
             grant = self.tokens.get(hashlib.sha256(proof.get("token", "").encode()).hexdigest())

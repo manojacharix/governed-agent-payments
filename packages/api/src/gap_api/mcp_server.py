@@ -12,10 +12,9 @@ from typing import Callable
 
 from mcp.server.mcpserver import MCPServer
 
-from gap_core.authority import Caller
-from gap_flow.flow import ProposalRequest, request_digest
+from gap_flow.flow import request_digest
 
-from .host import Host, HostError, read_digest
+from .host import Host, HostError, parse_request, read_digest
 
 TOOLS = ("propose_order", "get_determination", "list_proposals", "list_spokes", "request_change", "proceed_to_pay")
 
@@ -45,9 +44,10 @@ def build_server(host: Host, wheel_id: str, credential: Callable[[str, str], dic
                    "cart_ref": cart_ref, "destination_ref": destination_ref, "agent_confidence": agent_confidence}
         if rail_id:
             payload["rail_id"] = rail_id
-        digest = request_digest(ProposalRequest(spoke_id, Caller("x", "session_bound"), intent_id, merchant_ref, adapter_id, cart_ref,
-                                                destination_ref, agent_confidence, rail_id=rail_id))
-        return safe(lambda: host.propose(wheel_id, payload, credential(intent_id, digest)))
+        def go():
+            req = parse_request(payload)  # validated before anything is hashed or signed
+            return host.propose(wheel_id, payload, credential(intent_id, request_digest(req)))
+        return safe(go)
 
     @server.tool()
     def get_determination(proposal_id: str) -> dict:

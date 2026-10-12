@@ -4,7 +4,7 @@ import unicodedata
 import pytest
 from hypothesis import given, settings, strategies as st
 
-from gap_core.canonical import CanonicalError, canonical
+from gap_core.canonical import MAX_DEPTH, CanonicalError, canonical
 from gap_core.hashing import ZERO_HASH, hash_value, is_hash
 
 
@@ -92,9 +92,10 @@ def test_thousand_permutations_give_identical_bytes():
     # 50 trees x 20 permutations = 1,000 permutations
 
 
+_text = st.text(st.characters(blacklist_characters="\x00", blacklist_categories=("Cs",)), max_size=8)
 json_values = st.recursive(
-    st.integers(-(2**53) + 1, 2**53 - 1) | st.booleans() | st.text(max_size=8),
-    lambda children: st.lists(children, max_size=4) | st.dictionaries(st.text(max_size=6), children, max_size=4),
+    st.integers(-(2**53) + 1, 2**53 - 1) | st.booleans() | _text,
+    lambda children: st.lists(children, max_size=4) | st.dictionaries(_text, children, max_size=4),
     max_leaves=20,
 )
 
@@ -121,3 +122,18 @@ def test_zero_hash_is_the_genesis_value():
 @pytest.mark.parametrize("bad", ["sha256:abc", "sha1:" + "0" * 64, "sha256:" + "G" * 64, "sha256:" + "A" * 64])
 def test_is_hash_rejects_bad_forms(bad):
     assert not is_hash(bad)
+
+
+@pytest.mark.parametrize("value", ["a\x00b", {"k\x00": 1}, "\ud800", ["x", {"y": "\udfff"}]])
+def test_nul_and_unpaired_surrogates_are_refused(value):
+    with pytest.raises(CanonicalError):
+        canonical(value)
+
+
+def test_nesting_is_bounded():
+    v = 1
+    for _ in range(MAX_DEPTH):
+        v = [v]
+    canonical(v)  # exactly MAX_DEPTH deep is fine
+    with pytest.raises(CanonicalError):
+        canonical([v])
