@@ -22,7 +22,7 @@
 | `PerMille` | integer 0 to 1000 (used instead of fractions) | `900` |
 | `BasisPoints` | integer, 1 bp = 0.01% | `1000` (= 10%) |
 | `Hash` | `sha256:` + 64 lowercase hex characters | `sha256:9f86…` |
-| `Ref` | opaque string ≤ 128 characters, `[A-Za-z0-9._:-]` | `mrc_01j9…`, `fake-a:cart:42` |
+| `Ref` | opaque string ≤ 128 characters, `[A-Za-z0-9._:-]` and `_` (so every ID is also a valid `Ref`) | `mrc_01j9…`, `fake-a:cart:42` |
 | `ProfileRef` | `prof://<payer_ref>/<kind>/<id>`; points into the profile store | `prof://pyr_01…/cart/crt_01…` |
 | `Version` | integer ≥ 1, incremented per change of that object | `3` |
 | `Window` | `{kind: calendar_month | calendar_week | calendar_day | rolling, tz: IANA name, length?: Duration}`; `length` only for `rolling` | `{"kind":"calendar_month","tz":"Etc/UTC"}` |
@@ -45,6 +45,7 @@ ChainLink   {chain_id: Ref, seq: int ≥ 0, previous_hash: Hash, continues?: {ch
 Signature   {key_id: Id<key>, alg: "ES256", value: base64url(r ‖ s)}   (64-byte IEEE P1363 form)
 ```
 - The signature covers `canonical(record without "signature")`, so it covers the chain link.
+- **Low-s only.** ECDSA accepts both `(r, s)` and `(r, n − s)`; because a record's hash includes its signature, two valid signatures would give one record two hashes. Signers emit `s ≤ n/2` and verifiers reject anything else (found while building Phase 1, 12 Oct).
 - `record_hash = hash(record including "signature")`; the next record's `previous_hash` is this value.
 - Genesis: `seq = 0`, `previous_hash = "sha256:" + 64 zeros`.
 - A chain that **continues a wheel from another host** (§10.1) starts with `seq = 0` and carries `continues: {chain_id: Ref, host_ref: HostRef, handover_hash: Hash}` in its `ChainLink`; `previous_hash` is then `handover_hash` instead of zeros.
