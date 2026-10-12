@@ -34,4 +34,4 @@
 ## To decide when building the mapping
 
 - Authentication-strength scale (e.g. none < possession < possession + PIN or biometric).
-- `evidence.retention` period (to be taken from payment-system and consumer-law record-keeping rules; not yet researched).
+- ~~`evidence.retention`~~ **Decided 12 Oct: 3 years by default; 5 years when the operator is a regulated reporting entity.** Basis (from memory, to verify): Consumer Protection Act 2019 complaints within 2 years of the cause of action; Limitation Act 1963, 3 years for most contract claims; PMLA record-keeping rules, 5 years for reporting entities such as banks and payment system operators; DPDP Act pushes toward the shortest defensible period. **Confirm with a lawyer before real payers.**

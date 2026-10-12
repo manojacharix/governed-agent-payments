@@ -46,7 +46,8 @@ payment_ref, signal_ref, posted_at, previous_hash, signature
 3. **Unknown outcome:** `pending_outcome`, still counting; only definitive signals (merchant, rail, reconciliation) move it; escalated to reconciliation after `money.max_pending_age`. Agent claims never move balances.
 4. **Over-capture:** capture the hold, `overcapture` the excess; notify the payer; open a discrepancy (`05`); no new holds on the affected accounts until `available ≥ 0`; attribute to the merchant.
 5. **Refund:** completed refunds only; original window only; partial amounts only.
-6. **Suspend / revoke / expiry:** release pending holds not yet executed; executed payments proceed to their outcome.
+6. **Late settlement** (approved 12 Oct): capture, release and overcapture post to the window in which the hold was placed, even after it has closed. "No new holds while `available < 0`" is checked on the current window. An overcapture in a closed window still opens a finding and notifies the payer.
+7. **Suspend / revoke / expiry:** release pending holds not yet executed; executed payments proceed to their outcome.
 
 ---
 

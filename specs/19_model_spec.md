@@ -1,7 +1,7 @@
 # 19 · Model Spec
 
 **Problem:** the specs `01` to `07` define entities loosely ("fields are provisional"). This document fixes every entity's fields and types, the canonical form that is hashed and signed, how records are chained, and where each record is stored. Code is written against this document.
-**Status:** drafted 9 Oct 2026. Awaiting review.
+**Status:** drafted 9 Oct 2026; the five open questions resolved and approved 12 Oct 2026 (§1.6, §3.3, §5.1, §5.3, §6, §10.1). Awaiting review of the whole.
 **Rule:** where this document and `01` to `07` disagree, the numbered spec wins and this document is corrected.
 
 ---
@@ -41,12 +41,13 @@
 Every ledger record has the shape:
 ```
 { ...fields, chain: ChainLink, signature: Signature }
-ChainLink   {chain_id: Ref, seq: int ≥ 0, previous_hash: Hash}
+ChainLink   {chain_id: Ref, seq: int ≥ 0, previous_hash: Hash, continues?: {chain_id: Ref, host_ref: HostRef, handover_hash: Hash}}
 Signature   {key_id: Id<key>, alg: "ES256", value: base64url(r ‖ s)}   (64-byte IEEE P1363 form)
 ```
 - The signature covers `canonical(record without "signature")`, so it covers the chain link.
 - `record_hash = hash(record including "signature")`; the next record's `previous_hash` is this value.
 - Genesis: `seq = 0`, `previous_hash = "sha256:" + 64 zeros`.
+- A chain that **continues a wheel from another host** (§10.1) starts with `seq = 0` and carries `continues: {chain_id: Ref, host_ref: HostRef, handover_hash: Hash}` in its `ChainLink`; `previous_hash` is then `handover_hash` instead of zeros.
 - The value is byte-identical to a JWS ES256 signature over the same bytes, so records export to JWS (for AP2) without re-signing.
 
 ### 1.5 Chains
@@ -166,7 +167,12 @@ Scalar    = str | int | bool | Money
 ```
 Comparisons on a missing fact are false; `exists` tests presence. Fact names are listed in §5.3.
 
-**Category and attribute vocabularies** (`allow_categories`, `block_terms`, …) are `Ref`s from a versioned vocabulary named in the Tier 0 config (§13.1). Open question in §15.
+**Category and attribute vocabularies** (approved 12 Oct). `allow_categories`, `block_terms` and similar fields hold **vocabulary terms**:
+- **Format:** `<namespace>:<scheme>:<code>`, e.g. `std:mcc:5812`, `std:gpc:10000025`, `std:allergen:AN`, `op:<operator>:office_snacks`. Each vocabulary is a versioned, signed document; the Tier 0 config names the versions it uses (§13.1).
+- **Starter vocabulary (`std:`):** merchant categories from ISO 18245 merchant category codes; item categories from GS1 Global Product Classification bricks; item attributes from GS1 allergen type codes ("contains", "may contain"), extended as needed. **Before shipping any of these lists in the repository, confirm their redistribution licences.**
+- **Operators** add terms only under their own `op:<operator>:` namespace.
+- **Merchant adapters map** their own categories and attributes onto terms in a versioned mapping document; the mapping version is recorded on the fact, so a wrong mapping is attributable (`fact_misreported`).
+- **An unmapped value is unknown,** and the rule's `unknown: block | allow` decides; a dimension without an `unknown` field treats unknown as a failing clause.
 
 ### 3.4 Tier 0 (operator floor)
 Tier 0 is a config document (§13.1). Its rules have `author = operator`; jurisdiction mapping clauses have `author = jurisdiction`. The ledger holds `Tier0Version {operator_ref, jurisdiction, version, document_hash, chain, signature}` on the host chain.
@@ -244,13 +250,17 @@ Failing clauses not written by an operator or payer use `author = system` and th
 ### 5.1 Fact
 ```
 Fact {
-  name: str, value: Scalar | [Scalar] | {…},     exactly as captured (personal values: a ProfileRef)
+  name: str, value: FactValue,                   typed by the fact name (§5.3); personal values are a ProfileRef
   source: Ref, source_version: Ref, captured_at: Timestamp,
   verified: bool,                                true only if source ∈ facts.verified_sources
   attestation: {class: source_signed | capturer_signed | payer_presented | injected,
                 attested_by: Id<key>, capturer: host | operator, raw_hash?: Hash}
 }
 FrozenFacts { facts: [Fact] sorted by (name, source) }     facts_hash = hash(FrozenFacts)
+FactValue = str | int | bool | Timestamp | Duration | Money | PerMille | Ratio | TermSet | ProfileRef
+          | [one of the above, all the same type]
+Ratio     = {num: int, den: int ≥ 1}
+TermSet   = {terms: [vocabulary term], vocabulary: Ref, mapping_version: Ref}
 ```
 
 ### 5.2 Determination (ledger)
@@ -275,9 +285,30 @@ Determination {
 - `failing_clauses` is sorted by `(author, dimension, rule_id)` so the same inputs give identical bytes.
 - **`presented_hash`** = `hash({lines, fees, extras, total, rail_id, destination_ref})` as rendered to the payer.
 
-### 5.3 Fact names (reserved)
-`time.now`, `caller.assurance`, `caller.id`, `notice.delivered`, `notice.delivered_at`, `payer.context.<name>`, `account.age_days`, `account.success_rate_permille`, `account.open_disputes`, `findings.open_on_spoke`, `merchant.item_attributes.<item_id>`, `merchant.cart_hash`, `fx.<from>.<to>` (rate as an integer ratio `{num, den}`), `recovery.pending`.
-Other names are allowed under a namespace (`ext.<namespace>.<name>`); the evaluator treats unknown facts as unverified.
+### 5.3 Fact types (approved 12 Oct)
+
+**Values are a closed set of types** (`FactValue`, §5.1). Rules:
+- **No floats.** A source value with a fraction (a 4.5 rating) is converted at capture to an integer with a declared scale (`45` with scale 10, or a `PerMille`, or a `Ratio`), and the conversion is part of the fact's `source_version`.
+- **Anything unstructured** (a raw response, a document) is stored as a `ProfileRef` with its hash. Predicates cannot compare a `ProfileRef` except with `exists`; it matters only through a typed fact derived from it.
+- **Every fact name declares its type.** A predicate comparing a fact with a value of another type fails when the config loads, not at payment time.
+
+| Fact name | Type |
+|---|---|
+| `time.now` | `Timestamp` |
+| `caller.id` | `str` |
+| `caller.assurance` | `str` (`key_bound` \| `session_bound`) |
+| `notice.delivered` | `bool` |
+| `notice.delivered_at` | `Timestamp` |
+| `payer.context.<name>` | declared per name in the Tier 0 config |
+| `account.age_days` | `int` |
+| `account.success_rate_permille` | `PerMille` |
+| `account.open_disputes` | `int` |
+| `findings.open_on_spoke` | `int` |
+| `merchant.item_attributes.<item_id>` | `TermSet` |
+| `merchant.cart_hash` | `str` (a `Hash`) |
+| `fx.<from>.<to>` | `Ratio` |
+| `recovery.pending` | `bool` |
+| `ext.<namespace>.<name>` | declared with the namespace; unknown names are treated as unverified |
 
 ### 5.4 Resolution (ledger)
 ```
@@ -310,7 +341,9 @@ Posting (ledger) {
 ```
 - A posting group contains one posting per account set touched (the spoke and every ancestor including the hub), all in one chain append.
 - **Balances are never stored.** `available = limit − held − spent`, derived by replaying postings; a materialised view may cache them but is rebuilt from postings and checked in `verify_integrity()`.
-- A hold's `window_id` is fixed when placed; its capture, release and refund post to the same `window_id`.
+- **Windows (approved 12 Oct).** A hold's `window_id` is fixed when placed; its capture, release, overcapture and refund all post to that same `window_id`, even after the window has closed. So a payment is always counted under the limits it was approved against.
+- A release into a closed window returns room nobody can use; this is harmless.
+- The rule "no new holds while `available < 0`" (`03` §3) is checked on the **current** window of each account set. An overcapture posted to a closed window still opens a finding (`05`) and notifies the payer.
 
 ---
 
@@ -461,6 +494,23 @@ RecoveryCase (wheel chain) {
 
 ---
 
+### 10.1 Handover between hosts (approved 12 Oct)
+```
+Handover (old wheel chain, last record) {
+  wheel_id, from_host: HostRef, to_host: HostRef,
+  final_balances_hash: Hash,                      hash of derived balances at handover
+  carried_over: {holds: [Id<pst>], open_findings: [Id<fnd>]},
+  key_log_export_hash: Hash,                      hash of the old host's key log export
+  approved_by: Id<asr>,                           payer approval on a Trusted Surface
+  occurred_at, chain, signature (old host)
+}
+```
+- **Clean point only:** a handover is refused while any payment on the wheel is `pending_outcome`. Open holds are carried over as postings of kind `hold` on the new chain that reference the old `posting_id`s; open findings are carried over by id.
+- **Old chain closed:** no record may be appended after the `Handover`.
+- **New chain linked:** its first record carries `continues` (§1.4) with the handover's hash.
+- **Imported, never re-signed:** the new host keeps a read-only copy of the old chain and the old host's key log export, so old signatures verify after the old host is gone.
+- **Payer check:** the payer's Trusted Surface holds the last chain head it was sent and confirms that the `Handover` follows it, so no history can be dropped in the move.
+
 ## 11. Profile store and data keys (`07` §8)
 
 ```
@@ -528,7 +578,7 @@ mapping:
     - {level: two_factor, requires: [possession, {any_of: [knowledge, inherence]}]}
   rails: [RailProfile]
   silent: {max_amount: null}  # unset until a regulator publishes a threshold
-  evidence_retention: null    # open (§15)
+  evidence_retention: <Duration>   # per jurisdiction; see the jurisdiction notes
   dispute_routes: [{id: Ref, description_ref: Ref}]
   clauses: [Rule]             # author: jurisdiction; never overridable
   scheme_mappings: [{scheme: Ref, construct: spoke | standing_instruction | ledger_export | caller_identity, note: str}]
@@ -550,10 +600,12 @@ National schemes (delegation, mandate and agent-payment schemes) map onto `Spoke
 
 ---
 
-## 15. Open questions
+---
 
-1. **Ledger history when a wheel moves hosts.** Proposal: the old host appends a `handover` record to the wheel chain; the new host's first record (`seq = 0` on a new chain) carries `previous_hash` = that handover record's hash and the old `chain_id`, so verifiers can follow the chain across hosts. Needs a line in `06` or `07`.
-2. **Category and attribute vocabularies.** Who publishes them (operator, jurisdiction, a shared registry), and how merchant-specific terms map onto them.
-3. **`evidence.retention` for the first jurisdiction mapping.** Unresearched; blocks the `evidence_retention` value.
-4. **Partial captures across windows.** A hold placed on the last day of a window and captured after it posts to the hold's window (§6). Confirm this is the intended reading of `03`.
-5. **Fact value types.** Whether structured fact values (objects) should be restricted to a fixed set of shapes for replay stability.
+## 15. Resolved questions and follow-ups
+
+The five open questions of the 9 Oct draft were resolved and approved on 12 Oct: handover between hosts (§10.1), vocabularies (§3.3), evidence retention (set per jurisdiction mapping; India's value is in `../jurisdictions/india.md`), windows for late captures (§6), and fact types (§5.1, §5.3).
+
+**Follow-ups:**
+1. Confirm redistribution licences for the MCC list, GS1 GPC and GS1 allergen codes before shipping them.
+2. Confirm the India retention value with a lawyer.

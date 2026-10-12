@@ -23,7 +23,8 @@ A **machine-verifiable bundle**. The bundle is the evidence; any readable view i
 3. the decision **reproduces** from the disclosed facts and versions;
 4. the presented hash matches what was authorised;
 5. every signing key is in the key log and was valid when used (`07` §2), and the evaluator digest has a published release (`07` §7);
-6. each fact's attestation (`07` §6), so the pack never claims more than it supports.
+6. each fact's attestation (`07` §6), so the pack never claims more than it supports;
+7. for a wheel that moved hosts, the chain continues across each handover (`01` §6, `19` §10.1), using the previous host's imported key log.
 
 **Readable view:** a timeline generated from the bundle (which rule allowed or refused, who acted at each step, where authority and reality diverged), labelled as a rendering.
 

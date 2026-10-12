@@ -123,6 +123,8 @@ Every change is a new signed, chained version; determinations record the version
 
 The wheel is held by **one neutral host chosen by the payer**. Operators query it; it evaluates, places holds (`03`), records the decision, and returns a signed `AuthorityReceipt`. The wheel is a payer-owned signed document and can move between hosts (the Account Aggregator / consent-manager pattern).
 
+**Moving hosts** (approved 12 Oct 2026): only at a clean point (no payment with an unknown outcome), with the payer's approval on a Trusted Surface. The old host closes the wheel's chain with a signed handover record and exports its key log; the new host imports both read-only, never re-signs them, and starts a new chain linked to the handover. Open holds and findings carry over. Record format: `19` §10.1.
+
 ---
 
 ## 7. Jurisdictions

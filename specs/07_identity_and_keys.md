@@ -39,6 +39,7 @@ compromised_since?, enrolled_by (event_id), previous_hash, signature
 - **Revocation:** `revoked` keys sign nothing after `valid_until`; past signatures stay valid.
 - **Compromise:** `compromised` with `compromised_since`. Nothing is deleted. Verifiers flag every record signed by that key after `compromised_since` as `signed_after_compromise`, and reconciliation opens a finding for each payment it touches (`05`). Compromise is also a **system suspension trigger** (`01` §5): a compromised **surface** key suspends the wheel, and resuming needs another, uncompromised surface (or recovery, §3); a compromised **caller** key suspends that caller's enrolment, so spokes bound only to it stop working until the payer enrols a new key.
 - **Algorithms** are a parameter (`keys.algorithms`), so a deployment can change algorithm without a schema change.
+- **Handover** (approved 12 Oct): when a wheel moves hosts, the old host's key log is exported and imported read-only by the new host, so signatures made by the old host keep verifying (`01` §6).
 
 ---
 
