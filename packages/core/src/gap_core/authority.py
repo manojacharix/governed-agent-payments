@@ -222,19 +222,42 @@ class Wheel:
 
 # --- rails, callers, parameters --------------------------------------------------
 
+RAIL_STATUSES = ("live", "excluded", "ready_no_merchant", "placeholder", "reference")
+
+
 @dataclass(frozen=True)
 class RailProfile:
+    """A rail capability profile (04 §1, 19 §7.1). Jurisdiction mappings supply these as data."""
+
     rail_id: str
     authentication: str
     amount_binding: str
     approval_modes: tuple[str, ...]
     status: str = "live"
+    placement: str = "immediate"
+    reversibility: str = "none"
+    dispute_route: str = ""
+    per_transaction_max: Money | None = None
+    period_limit: Limit | None = None
+    max_duration_s: int | None = None
+    definitive_signals: dict = field(default_factory=dict)   # {success|failure|unknown: [status]}
+    retry_policy: dict = field(default_factory=dict)         # {safe_errors, max_retries, window_s}
 
     def __post_init__(self) -> None:
         if self.authentication not in AUTH_CLASS_RANK:
             raise ValueError("unknown authentication class")
         if self.amount_binding not in ("bound_at_rail", "not_bound"):
             raise ValueError("unknown amount binding")
+        if self.status not in RAIL_STATUSES:
+            raise ValueError(f"unknown rail status {self.status!r}")
+        if self.placement not in ("pending_then_confirm", "immediate"):
+            raise ValueError("unknown placement")
+        if self.reversibility not in ("refund_only", "chargeback", "none"):
+            raise ValueError("unknown reversibility")
+        if not self.approval_modes or any(m not in ("explicit_tap", "silent_with_notice") for m in self.approval_modes):
+            raise ValueError("approval_modes must list explicit_tap and/or silent_with_notice")
+        if ":" not in self.rail_id:
+            raise ValueError("rail_id is namespaced by jurisdiction: <jurisdiction>:<rail>")
 
 
 @dataclass(frozen=True)

@@ -32,6 +32,14 @@ def test_clean_proposal_is_allowed_with_a_tap():
     assert det.failing_clauses == () and det.clarify_fields == ()
 
 
+def test_a_rail_limit_refuses_as_a_jurisdiction_clause():
+    inp = scenario()
+    capped = replace(inp.rails["xx:pin"], per_transaction_max=xts(10000))
+    det = evaluate(replace(inp, rails={**inp.rails, "xx:pin": capped}))
+    clause = next(c for c in det.failing_clauses if c.rule_id == "rail:xx:pin:per_transaction")
+    assert det.outcome == "refuse" and clause.author == "jurisdiction" and not clause.overridable
+
+
 def test_agent_may_propose_a_permitted_rail():
     det = evaluate(scenario(body=body(rail_id="xx:wallet")))
     assert det.rail_id == "xx:wallet" and det.rail_chosen_by == "agent"

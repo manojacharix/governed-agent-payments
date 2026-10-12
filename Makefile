@@ -1,4 +1,4 @@
-.PHONY: test demo-phase1 evaluate
+.PHONY: test demo-phase1 evaluate mappings
 
 test:
 	uv run pytest
@@ -8,3 +8,6 @@ demo-phase1:
 
 evaluate:
 	uv run python tools/demo_phase2.py
+
+mappings:
+	uv run python tools/demo_phase3.py

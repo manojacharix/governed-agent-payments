@@ -1,0 +1,59 @@
+# United Kingdom jurisdiction mapping (layer 3), reference only. Source notes: jurisdictions/uk.md.
+# Shows that the jurisdiction layer swaps; not a basis for a UK deployment.
+mapping:
+  jurisdiction: uk
+  version: 0.1.0
+  status: reference
+  notes: "Amounts in pence. Several entries are from memory and not re-verified (see jurisdictions/uk.md)."
+
+  auth_strength_scale:
+    - {level: none, requires: []}
+    - {level: possession, requires: [possession]}
+    - {level: two_factor, requires: [possession, {any_of: [knowledge, inherence]}]}   # strong customer authentication
+
+  dispute_routes:
+    - {id: uk:card_chargeback, description: "Card scheme chargeback"}
+    - {id: uk:psr_reg76, description: "PSRs 2017 reg 76 refund of an unauthorised transaction via the payer's PSP"}
+
+  rails:
+    - rail_id: uk:faster_payments
+      authentication: human_per_payment
+      placement: immediate
+      amount_binding: bound_at_rail
+      approval_modes: [explicit_tap]
+      status: live                 # usable in demos; the mapping itself is status reference
+      reversibility: none
+      dispute_route: uk:psr_reg76
+    - rail_id: uk:card
+      authentication: human_per_payment          # SCA, with exemptions
+      placement: immediate
+      amount_binding: bound_at_rail
+      approval_modes: [explicit_tap]
+      status: live                 # usable in demos; the mapping itself is status reference
+      reversibility: chargeback
+      dispute_route: uk:card_chargeback
+    - rail_id: uk:open_banking_vrp
+      authentication: human_at_setup             # the mandate is authorised once
+      placement: immediate
+      amount_binding: not_bound
+      approval_modes: [explicit_tap, silent_with_notice]
+      status: live                 # usable in demos; the mapping itself is status reference
+      reversibility: refund_only
+      dispute_route: uk:psr_reg76
+
+  silent:
+    max_amount: null
+
+  evidence_retention_s: null      # not researched for the UK
+
+  clauses:
+    - rule_id: uk.currency_gbp
+      dimension: currency_geography
+      constraint: {allow_currencies: [GBP]}
+
+  scheme_mappings:
+    - {scheme: "Open Banking variable recurring payment mandate", construct: spoke, note: "max per payment, per period, expiry; revocable at the bank"}
+
+  open_questions:
+    - "Retention period not researched."
+    - "PSRs 2017 replacement not expected before 2028; FCA review of agentic payments ongoing."

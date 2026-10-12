@@ -1,0 +1,51 @@
+# Example operator (R2, first of two): a personal agent-ordering service in the UK (reference).
+# Example values only; a real operator sets its own.
+tier0:
+  operator_ref: opr_example_personal_uk
+  jurisdiction: uk
+  version: 1
+  notes: "Explicit tap by default; silent repeats only from standing instructions, up to 2,000 pounds, after a delivered notice."
+  vocabularies: {categories: "std:mcc@iso18245", item_attributes: "std:allergen@gs1"}
+  parameters:
+    auth.strength.create: two_factor
+    auth.strength.widen: two_factor
+    auth.strength.resume: two_factor
+    auth.strength.override: two_factor
+    auth.strength.no_auth_rail: two_factor
+    auth.strength.enrol_surface: two_factor
+    auth.strength.enrol_caller: two_factor
+    auth.strength.recovery: two_factor
+    identity.recovery_delay: 86400
+    identity.surface.min_assurance: hardware_attested
+    identity.caller.min_assurance: {explicit_tap: session_bound, silent_with_notice: key_bound}
+    identity.caller.max_validity: 7776000
+    identity.proof_max_age: 300
+    keys.algorithms: [ES256]
+    keys.anchor_interval: 3600
+    keys.anchor_witnesses: [payer_surfaces]
+    trusted_surfaces: [registered_app]
+    wheel.max_depth: 1
+    budget.window: {kind: calendar_month, tz: Europe/London}
+    approval.silent.preconditions:
+      - {fact: notice.delivered, op: eq, value: true}
+    approval.silent.notice_duration: 300
+    approval.silent.max_amount: {amount_minor: 200000, currency: GBP}
+    instruction.max_validity: 7776000
+    conditional_unlocks: []
+    decision.clarify_threshold: 900
+    decision.duplicate_window: 600
+    facts.verified_sources: [merchant_adapter, host]
+    money.max_pending_age: 3600
+    recon.sweep_interval: 900
+    recon.sweep_before_hold: true
+    notifications.channels: [push, email]
+  rules:
+    - rule_id: op.no_betting_or_liquor
+      dimension: merchant
+      constraint: {block_categories: ["std:mcc:7995", "std:mcc:5921"]}
+    - rule_id: op.per_payment_ceiling
+      dimension: amount
+      constraint: {per_transaction_max: {amount_minor: 500000, currency: GBP}}
+    - rule_id: op.extras
+      dimension: extras
+      constraint: {allow: [{kind: tip, max: {amount_minor: 10000, currency: GBP}}, {kind: merchant_note}, {kind: packaging}]}

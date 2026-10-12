@@ -1,0 +1,56 @@
+# Example operator (R2, second of two): a company procurement policy in India.
+# The same core enforces a different floor: matched purchase order, approved supplier, no silence.
+tier0:
+  operator_ref: opr_example_procurement
+  jurisdiction: in
+  version: 1
+  notes: "Company, then team, then agent: three levels of spokes. Every payment needs a matched PO and an approved supplier."
+  vocabularies: {categories: "std:mcc@iso18245", item_attributes: "std:allergen@gs1"}
+  parameters:
+    auth.strength.create: two_factor
+    auth.strength.widen: two_factor
+    auth.strength.resume: two_factor
+    auth.strength.override: two_factor
+    auth.strength.no_auth_rail: two_factor
+    auth.strength.enrol_surface: two_factor
+    auth.strength.enrol_caller: two_factor
+    auth.strength.recovery: two_factor
+    identity.recovery_delay: 172800
+    identity.surface.min_assurance: hardware_attested
+    identity.caller.min_assurance: {explicit_tap: key_bound, silent_with_notice: key_bound}
+    identity.caller.max_validity: 2592000
+    identity.proof_max_age: 120
+    keys.algorithms: [ES256]
+    keys.anchor_interval: 900
+    keys.anchor_witnesses: [payer_surfaces, auditor]
+    trusted_surfaces: [registered_app]
+    wheel.max_depth: 3
+    budget.window: {kind: calendar_month, tz: Asia/Kolkata}
+    approval.silent.preconditions: []
+    approval.silent.notice_duration: 0
+    approval.silent.max_amount: null          # no silent payments at all
+    instruction.max_validity: 2592000
+    conditional_unlocks: []
+    decision.clarify_threshold: 950
+    decision.duplicate_window: 86400
+    facts.verified_sources: [erp, host]
+    money.max_pending_age: 3600
+    recon.sweep_interval: 3600
+    recon.sweep_before_hold: true
+    notifications.channels: [email, erp_webhook]
+  rules:
+    - rule_id: op.po_matched
+      dimension: conditions
+      constraint: {when: {not: {fact: ext.procurement.po_matched, op: eq, value: true}}, effect: block}
+    - rule_id: op.approved_supplier
+      dimension: conditions
+      constraint: {when: {not: {fact: ext.procurement.supplier_approved, op: eq, value: true}}, effect: block}
+    - rule_id: op.authenticated_rails_only
+      dimension: payment_method
+      constraint: {allow_authentication: [human_per_payment]}
+    - rule_id: op.per_payment_ceiling
+      dimension: amount
+      constraint: {per_transaction_max: {amount_minor: 5000000, currency: INR}}
+    - rule_id: op.always_tap
+      dimension: approval_mode
+      constraint: {at_most: explicit_tap}

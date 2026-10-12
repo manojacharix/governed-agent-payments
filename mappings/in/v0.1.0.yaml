@@ -1,0 +1,98 @@
+# India jurisdiction mapping (layer 3). Source notes: jurisdictions/india.md, research/18, research/21.
+# Status "interpretation": a reading of rules and circulars, not legal advice. Open questions below.
+mapping:
+  jurisdiction: in
+  version: 0.1.0
+  status: interpretation
+  notes: >
+    Amounts in paise (INR minor units). Silent-approval ceiling unset until RBI, NPCI or CERT-In
+    publishes a threshold. Retention: 3 years by default; an operator that is a regulated
+    reporting entity (PMLA) must keep records for 5 years. Confirm both with a lawyer.
+
+  auth_strength_scale:            # weakest first
+    - {level: none, requires: []}
+    - {level: possession, requires: [possession]}
+    - {level: two_factor, requires: [possession, {any_of: [knowledge, inherence]}]}   # RBI Authentication Directions 2025
+
+  dispute_routes:
+    - {id: in:upi_odr, description: "UPI Online Dispute Resolution; RBI 2019 turnaround-time and compensation rules"}
+    - {id: in:consumer_commission, description: "Consumer Protection Act 2019 complaint (within 2 years of the cause of action)"}
+    - {id: in:merchant_grievance, description: "Merchant grievance officer under the E-Commerce Rules 2020"}
+
+  rails:
+    - rail_id: in:upi_intent
+      authentication: human_per_payment          # UPI PIN on the payer's own app
+      placement: pending_then_confirm
+      amount_binding: bound_at_rail              # the UPI app shows payee and amount at the PIN step
+      approval_modes: [explicit_tap]
+      status: live
+      reversibility: refund_only
+      dispute_route: in:upi_odr
+      definitive_signals: {success: [SUCCESS], failure: [FAILURE, DECLINED], unknown: [PENDING, TIMEOUT]}
+      retry_policy: {safe_errors: [], max_retries: 0, window_s: 0}
+
+    - rail_id: in:merchant_wallet
+      authentication: none                       # basis under the 2025 Directions unclear per merchant: treated as none
+      placement: immediate
+      amount_binding: not_bound
+      approval_modes: [explicit_tap, silent_with_notice]
+      status: live
+      reversibility: refund_only
+      dispute_route: in:merchant_grievance
+      note: "Closed or bank-issued PPI. Small PPIs: 10,000 rupees maximum balance and monthly debit (draft PPI Master Direction 2026)."
+
+    - rail_id: in:cash_on_delivery
+      authentication: none
+      placement: immediate
+      amount_binding: not_bound                  # the amount is seen only at the door
+      approval_modes: [explicit_tap]
+      status: live
+      reversibility: refund_only
+      dispute_route: in:merchant_grievance
+
+    - rail_id: in:upi_reserve_pay
+      authentication: human_at_setup             # NPCI OC-228, 8 Oct 2025
+      placement: immediate
+      amount_binding: not_bound                  # each debit is bounded only by the block
+      approval_modes: [explicit_tap, silent_with_notice]
+      status: ready_no_merchant
+      reversibility: refund_only
+      dispute_route: in:upi_odr
+      limits:
+        per_transaction: {amount_minor: 1000000, currency: INR}    # block of at most 10,000 rupees
+        max_duration_s: 7776000                                    # 90 days
+      retry_policy: {safe_errors: [TIMEOUT], max_retries: 3, window_s: 86400}   # timeouts only, 3 in 24 hours
+
+    - rail_id: in:uap
+      authentication: none                       # unknown until NPCI publishes the specification
+      placement: immediate
+      amount_binding: not_bound
+      approval_modes: [explicit_tap]
+      status: placeholder                        # held back at GFF 2026 pending RBI clearance
+      reversibility: none
+      dispute_route: in:upi_odr
+
+  silent:
+    max_amount: null              # no published threshold yet
+
+  evidence_retention_s: 94608000  # 3 years
+
+  clauses:
+    - rule_id: in.currency_inr
+      dimension: currency_geography
+      constraint: {allow_currencies: [INR]}
+
+  scheme_mappings:
+    - {scheme: "NPCI UAP power of attorney (reported, not launched)", construct: spoke, note: "caller-bound spoke"}
+    - {scheme: "NPCI UAP logbook (reported)", construct: ledger_export, note: "export of a wheel chain"}
+    - {scheme: "NPCI UAP agent identity (reported)", construct: caller_identity, note: "Caller plus its key log entry"}
+    - {scheme: "UPI Reserve Pay block (OC-228)", construct: spoke, note: "merchant-bound spoke within 10,000 rupees and 90 days"}
+    - {scheme: "UPI Circle partial delegation (OC-201)", construct: explicit_tap_spoke, note: "agent proposes, payer completes with PIN; an analogy until agents may be secondary users"}
+    - {scheme: "RBI E-mandate Framework 2026", construct: standing_instruction, note: "AFA at registration, 24-hour pre-debit notice with opt-out, post-debit notice"}
+
+  open_questions:
+    - "Silent-approval threshold: none published by RBI, NPCI or CERT-In."
+    - "Retention period: 3 years assumed; confirm with a lawyer, and 5 years for regulated reporting entities."
+    - "Merchant wallet authentication basis under the RBI Authentication Directions 2025."
+    - "Whether an operator of this layer is an e-commerce entity under the E-Commerce Rules 2020."
+    - "UAP specification and whether agents may be UPI Circle secondary users."

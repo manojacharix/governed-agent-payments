@@ -1,6 +1,6 @@
 # India
 
-**Status:** notes, not yet a machine-readable mapping. Sources: `../research/18_silence_and_approval_rules.md`, `../research/21_npci_uap_deep_dive.md`.
+**Status:** notes. The machine-readable mapping built from them is `../mappings/in/v0.1.0.yaml` (12 Oct 2026). Sources: `../research/18_silence_and_approval_rules.md`, `../research/21_npci_uap_deep_dive.md`.
 
 ## Rail profiles (candidates)
 

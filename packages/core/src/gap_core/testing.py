@@ -39,18 +39,19 @@ PARAMS = Params(
 )
 
 
-def body(**kw) -> ProposalBody:
+def body(currency: str = "XTS", **kw) -> ProposalBody:
+    m = lambda minor: Money(minor, currency)  # noqa: E731
     lines = kw.pop("lines", (
-        CartLine("item_milk", 2, xts(6000), category="std:gpc:milk"),
-        CartLine("item_bread", 1, xts(4500), category="std:gpc:bread"),
+        CartLine("item_milk", 2, m(6000), category="std:gpc:milk"),
+        CartLine("item_bread", 1, m(4500), category="std:gpc:bread"),
     ))
-    fees = kw.pop("fees", (Fee("delivery", xts(3000)),))
+    fees = kw.pop("fees", (Fee("delivery", m(3000)),))
     extras = kw.pop("extras", ())
     total = kw.pop("total", None)
     if total is None:
         t = sum(l.unit_price.amount_minor * l.quantity for l in lines) + sum(f.amount.amount_minor for f in fees)
         t += sum(e.amount.amount_minor for e in extras if e.amount is not None)
-        total = xts(t)
+        total = Money(t, currency)
     return ProposalBody(
         merchant_ref=kw.pop("merchant_ref", "mrc_shop"), adapter_id=kw.pop("adapter_id", "fake-a"),
         merchant_cart_ref=kw.pop("merchant_cart_ref", "cart-1"), lines=lines, fees=fees, extras=extras, total=total,
@@ -65,15 +66,15 @@ def item_facts(b: ProposalBody, terms=frozenset(), verified=True, attestation="c
     ]
 
 
-def scenario(**kw) -> EvaluationInput:
-    b = kw.pop("body", None) or body()
+def scenario(currency: str = "XTS", **kw) -> EvaluationInput:
+    b = kw.pop("body", None) or body(currency)
     spoke = kw.pop("spoke", None) or Spoke(
         spoke_id=SPOKE, wheel_id=WHEEL, approval_mode="explicit_tap",
         valid_from=datetime(2026, 1, 1, tzinfo=timezone.utc), valid_until=datetime(2027, 1, 1, tzinfo=timezone.utc),
-        callers=(CALLER,), caps=(Limit(xts(400000), MONTH),),
+        callers=(CALLER,), caps=(Limit(Money(400000, currency), MONTH),),
     )
     spokes = kw.pop("spokes", None) or {spoke.spoke_id: spoke}
-    wheel = kw.pop("wheel", None) or Wheel(WHEEL, "pyr_test", "xx", budgets=(Limit(xts(1500000), MONTH),))
+    wheel = kw.pop("wheel", None) or Wheel(WHEEL, "pyr_test", "xx", budgets=(Limit(Money(1500000, currency), MONTH),))
     facts = kw.pop("facts", None)
     if facts is None:
         facts = FactSet([Fact("merchant.categories", TermSet(frozenset({"std:mcc:5411"}), "std:mcc@1", "fake-a@1"), "merchant", True, "capturer_signed")] + item_facts(b))

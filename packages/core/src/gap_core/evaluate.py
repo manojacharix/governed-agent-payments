@@ -194,6 +194,8 @@ def evaluate(inp: EvaluationInput) -> Determination | Repeat | IntentConflict:
         _check(rule, owner, inp, ctx, rail)
     if rail is None:
         ctx.sys("sys.no_rail")
+    elif rail.per_transaction_max is not None and not _le(body.total, rail.per_transaction_max):
+        ctx.fail(f"rail:{rail.rail_id}:per_transaction", "payment_method", "jurisdiction")  # the rail's own limit (04 §1)
     if (rf := inp.facts.get("recovery.pending")) is not None and rf.value is True:
         ctx.sys("sys.recovery_pending")
 

@@ -253,6 +253,7 @@ Failing clauses not written by an operator or payer use `author = system` and th
 - **Allow-style checks need a verified fact; block-style checks fire on any fact.** Silent-approval preconditions read verified facts only.
 - **Cautionary conditions** (dimension 12) fire if the predicate holds with all facts **or** with verified facts only. Otherwise an unverified fact could switch a `not` condition off (found by the Phase 2 property test).
 - **Default rail:** the live permitted rail with the highest authentication class, then `bound_at_rail`, then the lowest `rail_id`.
+- **A rail's own per-transaction limit** is enforced as a jurisdiction clause `rail:<rail_id>:per_transaction` (never overridable).
 - **The time-zone database** is pinned as a dependency, because window and span results depend on it.
 
 ---
