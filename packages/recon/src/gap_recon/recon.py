@@ -79,6 +79,15 @@ class SweepResult:
     refunded: int = 0
 
 
+def _subject(f: dict) -> str:
+    """What a finding is about: a refund for refund_stalled, an order for external_order, else the payment."""
+    if f["kind"] == "refund_stalled":
+        return f.get("detail", {}).get("refund_ref")
+    if f["kind"] == "external_order":
+        return f.get("merchant_order_ref")
+    return f.get("payment_ref") or f.get("merchant_order_ref")
+
+
 class Reconciler:
     def __init__(self, ledger: Ledger, signer: Signer, clock: Clock, rng, money: MoneyInFlight,
                  *, max_pending_age_s: int, refund_stall_s: int) -> None:
@@ -163,9 +172,8 @@ class Reconciler:
             pays = self._payments(wheel_id)
             state = replay(self.ledger, wheel_id)
             existing = self.findings(wheel_id)
-            open_by_subject = {(f["kind"], f.get("payment_ref") or f.get("merchant_order_ref")): fid
-                               for fid, f in existing.items() if f["status"] == "open"}
-            recorded = {(f["kind"], f.get("payment_ref") or f.get("merchant_order_ref")) for f in existing.values()}
+            open_by_subject = {(f["kind"], _subject(f)): fid for fid, f in existing.items() if f["status"] == "open"}
+            recorded = {(f["kind"], _subject(f)) for f in existing.values()}
             res = SweepResult({})
             observed, coverage = {"orders": [], "bank": [], "refunds": []}, {}
             lists = {}
@@ -277,7 +285,8 @@ class Reconciler:
                         if p_state and p_state.captured - p_state.refunded >= rf.amount.amount_minor:
                             self.money.refund(wheel_id, det_id, rf.amount, Signal("bank" if credited else "merchant", rf.refund_ref))
                             res.refunded += 1
-                        close("refund_stalled", rf.refund_ref, order_ref=rf.merchant_order_ref, payment_ref=det_id)
+                        close("refund_stalled", rf.refund_ref, order_ref=rf.merchant_order_ref, payment_ref=det_id,
+                              detail={"refund_ref": rf.refund_ref})
                     elif now - rf.at > self.refund_stall:
                         open_once("refund_stalled", rf.refund_ref, payment_ref=det_id, order_ref=rf.merchant_order_ref,
                                   sources=[src_m(aid)] + ([src_b] if bank is not None else []), detail={"refund_ref": rf.refund_ref})
