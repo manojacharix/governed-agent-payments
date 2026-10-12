@@ -18,7 +18,7 @@ from datetime import timedelta
 
 from gap_core.authority import RailProfile
 from gap_core.clock import Clock
-from gap_core.evaluate import Determination
+from gap_core.evaluate import Determination, can_override
 from gap_core.hashing import hash_value
 from gap_core.ids import new_id
 from gap_core.money import Money
@@ -39,6 +39,7 @@ class Authorisation:
 
     kind: str  # payer_approval | standing_instruction
     no_auth_rail_ok: bool = False  # the approval met auth.strength.no_auth_rail (checked by the identity layer)
+    overridden: frozenset = frozenset()  # payer-authored clauses overridden for this one payment (02 §2)
 
 
 @dataclass
@@ -61,8 +62,9 @@ class Executor:
         self.ledger, self.signer, self.clock, self.rng = ledger, signer, clock, rng
 
     def _guard(self, det: Determination, rail: RailProfile, adapter: MerchantAdapter, auth: Authorisation) -> None:
-        if det.stage != "authorisation" or det.outcome != "allow":
-            raise ExecutionRefused("only an authorisation-stage allow executes")
+        overridden_ok = det.outcome == "refuse" and bool(auth.overridden) and can_override(det, auth.overridden)
+        if det.stage != "authorisation" or not (det.outcome == "allow" or overridden_ok):
+            raise ExecutionRefused("only an authorisation-stage allow, or a refusal the payer overrode, executes")
         if rail.rail_id != det.rail_id:
             raise ExecutionRefused(f"rail {rail.rail_id} is not the approved rail {det.rail_id}; never switched without a new approval")
         if rail.status != "live":

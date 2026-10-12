@@ -65,6 +65,15 @@ def test_no_rail_change_without_a_new_approval(ex):
     assert m.place_calls == 0
 
 
+def test_a_payer_override_executes_only_if_it_covers_every_failing_clause(ex):
+    det, _ = authorised("in:upi_intent")
+    refused = replace(det, outcome="refuse", failing_clauses=(__import__("gap_core.evaluate", fromlist=["FailingClause"]).FailingClause("p1", "items", "payer", True),))
+    with pytest.raises(ExecutionRefused):
+        ex.execute(WHEEL, refused, "cart-1", "dst_home", UPI, merchant("b"), PAYER)
+    res = ex.execute(WHEEL, refused, "cart-1", "dst_home", UPI, merchant("b"), Authorisation("payer_approval", overridden=frozenset({"p1"})))
+    assert res.outcome == "success"
+
+
 def test_a_rail_the_merchant_does_not_offer_is_refused(ex):
     det, _ = authorised("in:upi_intent")
     other = replace(UPI, rail_id="in:card")
