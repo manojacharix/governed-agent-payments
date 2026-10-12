@@ -7,7 +7,7 @@ fake-b: immediate placement, one flat fee, ignores idempotency keys (a blind ret
 
 Both take a script of behaviours for place(): "ok", "timeout_after_create", "timeout_before_create",
 "decline", "overcharge:<minor units>", "error:<CODE>" (raised before creating), "error_after_create:<CODE>",
-"processing" (an unknown status).
+"processing" (an unknown status), "substitute" (delivers a different item than approved).
 """
 
 from __future__ import annotations
@@ -20,7 +20,9 @@ from gap_core.hashing import hash_value
 from gap_core.money import Money
 from gap_core.proposal import CartLine, Fee
 
-from .interface import AdapterInfo, CartView, Coverage, MerchantError, MerchantTimeout, OrderView, PlaceResult
+from gap_core.proposal import content_hash
+
+from .interface import AdapterInfo, CartView, Coverage, MerchantError, MerchantTimeout, OrderView, PlaceResult, RefundView
 
 
 @dataclass
@@ -42,6 +44,7 @@ class FakeMerchant:
             self.history_last_n = 5
         self.carts: dict[str, _Cart] = {}
         self.orders: dict[str, OrderView] = {}
+        self.refunds: dict[str, RefundView] = {}
         self.place_calls = 0
 
     # --- test controls ------------------------------------------------------------
@@ -85,11 +88,15 @@ class FakeMerchant:
     def get_item_attributes(self, item_ids: list[str]) -> dict:
         return {}
 
-    def _create(self, cart_ref: str, key: str, status: str, charged_extra: int = 0) -> OrderView:
+    def _create(self, cart_ref: str, key: str, status: str, charged_extra: int = 0, substitute: bool = False) -> OrderView:
         view = self.get_cart(cart_ref)
         ref = f"{self.shape}-order-{len(self.orders) + 1}"
         charged = None if status in ("PENDING_PAYMENT", "processing", "PROCESSING") else Money(view.total.amount_minor + charged_extra, self.currency)
-        o = OrderView(ref, cart_ref, status, view.total, charged, self.clock.now(), key if self.shape == "a" else None)
+        lines = view.lines
+        if substitute:  # same price, a different item: the cart the payer approved is not what was ordered
+            lines = (replace(lines[0], item_id=lines[0].item_id + "_substitute"),) + lines[1:]
+        o = OrderView(ref, cart_ref, status, view.total, charged, self.clock.now(), key if self.shape == "a" else None,
+                      content_hash(lines, view.fees))
         self.orders[ref] = o
         return o
 
@@ -113,7 +120,7 @@ class FakeMerchant:
             o = self._create(cart_ref, idempotency_key, "PROCESSING" if self.shape == "a" else "processing")
             return PlaceResult(o.status, o.merchant_order_ref)
         extra = int(step.split(":", 1)[1]) if step.startswith("overcharge:") else 0
-        o = self._create(cart_ref, idempotency_key, ok_status, extra)
+        o = self._create(cart_ref, idempotency_key, ok_status, extra, substitute=step == "substitute")
         if step == "timeout_after_create":
             raise MerchantTimeout()
         if step.startswith("error_after_create:"):
@@ -130,6 +137,19 @@ class FakeMerchant:
         if cov.limit_code == "last_n":
             orders = orders[-cov.detail:]
         return orders, cov
+
+    def refund(self, merchant_order_ref: str, amount: Money, *, completes: bool = True) -> RefundView:
+        """Test control: the merchant starts a refund; it completes now or stalls."""
+        r = RefundView(f"{self.shape}-refund-{len(self.refunds) + 1}", merchant_order_ref, amount,
+                       "completed" if completes else "initiated", self.clock.now())
+        self.refunds[r.refund_ref] = r
+        return r
+
+    def complete_refund(self, refund_ref: str) -> None:
+        self.refunds[refund_ref] = replace(self.refunds[refund_ref], status="completed")
+
+    def list_refunds(self, since: datetime) -> list[RefundView]:
+        return sorted((r for r in self.refunds.values() if r.at >= since), key=lambda r: r.at)
 
     def cancel(self, merchant_order_ref: str) -> str:
         if self.shape == "a":

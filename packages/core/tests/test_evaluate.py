@@ -360,7 +360,7 @@ def test_standing_instruction_runs_silently():
         (lambda i: replace(i, rails={**i.rails, "xx:wallet": replace(i.rails["xx:wallet"], approval_modes=("explicit_tap",))}), "rail:xx:wallet"),
         (lambda i: replace(i, params=replace(i.params, silent_max_amount=xts(100))), "param:approval.silent.max_amount"),
         (lambda i: replace(i, params=replace(i.params, silent_max_amount=None)), "param:approval.silent.max_amount"),
-        (lambda i: replace(i, params=replace(i.params, silent_preconditions=({"fact": "notice.delivered", "op": "eq", "value": True},))), "param:approval.silent.preconditions"),
+        (lambda i: replace(i, params=replace(i.params, silent_preconditions=({"fact": "account.age_days", "op": "ge", "value": 30},))), "param:approval.silent.preconditions"),
         (lambda i: replace(i, caller=Caller("clr_scheduler", "session_bound")), "caller:assurance"),
         (lambda i: replace(i, facts=i.facts.with_fact(Fact("findings.open_on_spoke", 1, "host", True, "injected"))), "finding:open"),
     ],
@@ -372,11 +372,21 @@ def test_every_layer_can_force_a_tap(change, reason):
 
 def test_unverified_fact_cannot_satisfy_a_silent_precondition():
     pre = ({"fact": "notice.delivered", "op": "eq", "value": True},)
-    inp = _silent(params=replace(PARAMS, silent_preconditions=pre))
+    inp = _silent(params=replace(PARAMS, silent_preconditions=pre), stage="authorisation")
     unverified = inp.facts.with_fact(Fact("notice.delivered", True, "device", False, "capturer_signed"))
     verified = inp.facts.with_fact(Fact("notice.delivered", True, "host", True, "injected"))
     assert evaluate(replace(inp, facts=unverified)).approval_mode == "explicit_tap"
     assert evaluate(replace(inp, facts=verified)).approval_mode == "silent_with_notice"
+
+
+def test_notice_preconditions_are_deferred_to_authorisation():
+    pre = ({"fact": "notice.delivered", "op": "eq", "value": True},)
+    inp = _silent(params=replace(PARAMS, silent_preconditions=pre))
+    assert evaluate(inp).approval_mode == "silent_with_notice"  # proposal stage: no notice can exist yet
+    stage2 = replace(inp, stage="authorisation")
+    assert evaluate(stage2).approval_mode == "explicit_tap"  # not delivered: falls back to a tap
+    delivered = replace(stage2, facts=stage2.facts.with_fact(Fact("notice.delivered", True, "host", True, "injected")))
+    assert evaluate(delivered).approval_mode == "silent_with_notice"
 
 
 def test_a_tap_parent_makes_the_child_tap():

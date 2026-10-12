@@ -6,10 +6,13 @@ requires-python = ">=3.12"
 members = [
     "gap-adapters",
     "gap-core",
+    "gap-evidence",
+    "gap-flow",
     "gap-keys",
     "gap-ledger",
     "gap-mapping",
     "gap-profile",
+    "gap-recon",
     "gap-sim",
     "governed-agent-payments",
 ]
@@ -204,6 +207,46 @@ requires-dist = [
 ]
 
 [[package]]
+name = "gap-evidence"
+version = "0.1.0"
+source = { editable = "packages/evidence" }
+dependencies = [
+    { name = "gap-core" },
+    { name = "gap-ledger" },
+    { name = "gap-profile" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gap-core", editable = "packages/core" },
+    { name = "gap-ledger", editable = "packages/ledger" },
+    { name = "gap-profile", editable = "packages/profile" },
+]
+
+[[package]]
+name = "gap-flow"
+version = "0.1.0"
+source = { editable = "packages/flow" }
+dependencies = [
+    { name = "gap-adapters" },
+    { name = "gap-core" },
+    { name = "gap-keys" },
+    { name = "gap-ledger" },
+    { name = "gap-profile" },
+    { name = "gap-recon" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gap-adapters", editable = "packages/adapters" },
+    { name = "gap-core", editable = "packages/core" },
+    { name = "gap-keys", editable = "packages/keys" },
+    { name = "gap-ledger", editable = "packages/ledger" },
+    { name = "gap-profile", editable = "packages/profile" },
+    { name = "gap-recon", editable = "packages/recon" },
+]
+
+[[package]]
 name = "gap-keys"
 version = "0.1.0"
 source = { editable = "packages/keys" }
@@ -268,6 +311,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "gap-recon"
+version = "0.1.0"
+source = { editable = "packages/recon" }
+dependencies = [
+    { name = "gap-adapters" },
+    { name = "gap-core" },
+    { name = "gap-ledger" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gap-adapters", editable = "packages/adapters" },
+    { name = "gap-core", editable = "packages/core" },
+    { name = "gap-ledger", editable = "packages/ledger" },
+]
+
+[[package]]
 name = "gap-sim"
 version = "0.1.0"
 source = { editable = "packages/sim" }
@@ -297,10 +357,13 @@ source = { virtual = "." }
 dev = [
     { name = "gap-adapters" },
     { name = "gap-core" },
+    { name = "gap-evidence" },
+    { name = "gap-flow" },
     { name = "gap-keys" },
     { name = "gap-ledger" },
     { name = "gap-mapping" },
     { name = "gap-profile" },
+    { name = "gap-recon" },
     { name = "gap-sim" },
     { name = "hypothesis" },
     { name = "pytest" },
@@ -312,10 +375,13 @@ dev = [
 dev = [
     { name = "gap-adapters", editable = "packages/adapters" },
     { name = "gap-core", editable = "packages/core" },
+    { name = "gap-evidence", editable = "packages/evidence" },
+    { name = "gap-flow", editable = "packages/flow" },
     { name = "gap-keys", editable = "packages/keys" },
     { name = "gap-ledger", editable = "packages/ledger" },
     { name = "gap-mapping", editable = "packages/mapping" },
     { name = "gap-profile", editable = "packages/profile" },
+    { name = "gap-recon", editable = "packages/recon" },
     { name = "gap-sim", editable = "packages/sim" },
     { name = "hypothesis", specifier = ">=6" },
     { name = "pytest", specifier = ">=8" },

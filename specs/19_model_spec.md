@@ -251,6 +251,7 @@ Failing clauses not written by an operator or payer use `author = system` and th
 - **Usage is an input.** `evaluate()` receives held-plus-spent and counts per `(owner, window_id)` for every window it checks; the spoke and every ancestor scope their own rules' aggregates, the wheel scopes Tier 0, jurisdiction and hub rules.
 - **A limit in another currency is never satisfied** by the proposal's amount.
 - **Allow-style checks need a verified fact; block-style checks fire on any fact.** Silent-approval preconditions read verified facts only.
+- **Notice preconditions are deferred.** At the proposal stage, silent preconditions that only reference `notice.*` facts are skipped (no notice can exist before the proposal); at authorisation every precondition applies, so an undelivered notice falls back to a tap (found while building Phase 6).
 - **Cautionary conditions** (dimension 12) fire if the predicate holds with all facts **or** with verified facts only. Otherwise an unverified fact could switch a `not` condition off (found by the Phase 2 property test).
 - **Default rail:** the live permitted rail with the highest authentication class, then `bound_at_rail`, then the lowest `rail_id`.
 - **A rail's own per-transaction limit** is enforced as a jurisdiction clause `rail:<rail_id>:per_transaction` (never overridable).

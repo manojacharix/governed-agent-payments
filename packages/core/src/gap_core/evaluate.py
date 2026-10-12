@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .authority import ASSURANCE_RANK, ATTESTATION_RANK, AUTH_CLASS_RANK, DAYS, Caller, Params, RailProfile, Rule, Spoke, Wheel
-from .facts import FactSet, evaluate_predicate
+from .facts import FactSet, evaluate_predicate, predicate_facts
 from .money import Money
 from .proposal import Proposal, cart_hash, presented_hash, proposal_hash
 from .timefmt import format_ts
@@ -502,6 +502,8 @@ def _approval_mode(inp: EvaluationInput, chain: list[Spoke], rail: RailProfile |
     if cap is None or not _le(worst, cap):
         reasons.append("param:approval.silent.max_amount")
     for pre in inp.params.silent_preconditions:  # permissive, so verified facts only
+        if inp.stage == "proposal" and all(n.startswith("notice.") for n in predicate_facts(pre)):
+            continue  # a notice cannot be delivered before the proposal exists; enforced at authorisation
         if not evaluate_predicate(pre, inp.facts, verified_only=True):
             reasons.append("param:approval.silent.preconditions")
             break

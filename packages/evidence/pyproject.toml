@@ -1,0 +1,18 @@
+[project]
+name = "gap-evidence"
+version = "0.1.0"
+description = "gap evidence"
+requires-python = ">=3.12"
+dependencies = ["gap-core", "gap-ledger", "gap-profile"]
+
+[tool.uv.sources]
+gap-core = { workspace = true }
+gap-ledger = { workspace = true }
+gap-profile = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gap_evidence"]

@@ -79,6 +79,11 @@ class FactSet:
     def __iter__(self):
         return iter(self._by_name.values())
 
+    def __eq__(self, other) -> bool:
+        return isinstance(other, FactSet) and self._by_name == other._by_name
+
+    __hash__ = None  # mutable-looking container: not hashable
+
 
 # --- predicates ----------------------------------------------------------------
 

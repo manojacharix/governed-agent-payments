@@ -58,6 +58,16 @@ class OrderView:
     charged: Money | None
     placed_at: datetime
     idempotency_key: str | None = None  # only if the merchant records it
+    content_hash: str | None = None     # gap_core.proposal.content_hash of what was actually ordered
+
+
+@dataclass(frozen=True)
+class RefundView:
+    refund_ref: str
+    merchant_order_ref: str
+    amount: Money
+    status: str  # initiated | completed | failed
+    at: datetime
 
 
 class MerchantTimeout(Exception):
@@ -80,3 +90,4 @@ class MerchantAdapter(Protocol):
     def get_order(self, merchant_order_ref: str) -> OrderView: ...
     def list_orders(self, since: datetime) -> tuple[list[OrderView], Coverage]: ...
     def cancel(self, merchant_order_ref: str) -> str: ...
+    def list_refunds(self, since: datetime) -> list[RefundView]: ...

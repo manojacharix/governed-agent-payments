@@ -115,6 +115,13 @@ def cart_hash(body: ProposalBody) -> str:
     return hash_value({"merchant_ref": body.merchant_ref, "lines": body._lines_json(), "fees": body._fees_json()})
 
 
+def content_hash(lines, fees) -> str:
+    """What was in the cart, independent of who computes it: the merchant can compute it too (item_mismatch, 05)."""
+    ls = sorted((l.to_json() for l in lines), key=lambda d: (d["item_id"], d.get("variant_id", "")))
+    fs = sorted(({"kind": f.kind, "amount": f.amount.to_json()} for f in fees), key=lambda d: (d["kind"], d["amount"]["amount_minor"]))
+    return hash_value({"lines": [{k: v for k, v in l.items() if k != "category"} for l in ls], "fees": fs})
+
+
 def presented_hash(body: ProposalBody, rail_id: str) -> str:
     """What the payer approves (02 §1, invariant 10): lines, fees, extras, total, rail, destination."""
     return hash_value(
