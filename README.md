@@ -47,6 +47,7 @@ make demo-phase1   # sign a chain, tamper with it, see verification fail
 make evaluate      # the evaluator on six situations
 make mappings      # one evaluator, India / UK mappings and two operators swapped underneath
 make ledger        # Postgres ledger: payments, an overcharge, erasure, and a database admin's edit caught
+make simulate      # synthetic run: 60 payers, 5,000 proposals over 75 days, invariants checked (SEED=, PAYERS=, EVENTS=)
 ```
 
 | Package | Contents |
@@ -55,6 +56,7 @@ make ledger        # Postgres ledger: payments, an overcharge, erasure, and a da
 | `packages/keys` (`gap_keys`) | Signers: a local software signer for development and tests |
 | `packages/ledger` (`gap_ledger`) | Postgres ledger with database-enforced chains, money in flight (holds, captures, releases, overcaptures, refunds), key log, `verify_integrity()` |
 | `packages/profile` (`gap_profile`) | Postgres profile store: personal data under per-payer AES-256-GCM keys, salted commitments, retention holds, shredding |
+| `packages/sim` (`gap_sim`) | Seeded synthetic workloads through the whole stack: personal and procurement payers on the shipped configs, messy settlements, adversarial inputs; a shadow ledger and invariant checks |
 | `packages/mapping` (`gap_mapping`) | Loads jurisdiction mappings (`mappings/`) and Tier 0 configs (`tier0/`) strictly into core types |
 
 | Configuration | Contents |

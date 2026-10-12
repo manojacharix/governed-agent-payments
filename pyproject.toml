@@ -14,9 +14,10 @@ gap-keys = { workspace = true }
 gap-mapping = { workspace = true }
 gap-ledger = { workspace = true }
 gap-profile = { workspace = true }
+gap-sim = { workspace = true }
 
 [dependency-groups]
-dev = ["pytest>=8", "hypothesis>=6", "gap-core", "gap-keys", "gap-mapping", "gap-ledger", "gap-profile"]
+dev = ["pytest>=8", "hypothesis>=6", "gap-core", "gap-keys", "gap-mapping", "gap-ledger", "gap-profile", "gap-sim"]
 
 [tool.pytest.ini_options]
 testpaths = ["packages"]
