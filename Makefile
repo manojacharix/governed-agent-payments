@@ -1,4 +1,4 @@
-.PHONY: test demo-phase1 evaluate mappings ledger simulate
+.PHONY: test demo-phase1 evaluate mappings ledger simulate execute
 
 test:
 	uv run pytest
@@ -17,3 +17,6 @@ ledger:
 
 simulate:
 	uv run python tools/simulate.py $(SEED) $(PAYERS) $(EVENTS)
+
+execute:
+	uv run python tools/demo_phase5.py

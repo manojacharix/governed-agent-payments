@@ -194,6 +194,8 @@ def evaluate(inp: EvaluationInput) -> Determination | Repeat | IntentConflict:
         _check(rule, owner, inp, ctx, rail)
     if rail is None:
         ctx.sys("sys.no_rail")
+    elif not _offered(inp, rail.rail_id):
+        ctx.sys("sys.rail_not_offered")  # the merchant cannot take this rail: refuse before the payer approves
     elif rail.per_transaction_max is not None and not _le(body.total, rail.per_transaction_max):
         ctx.fail(f"rail:{rail.rail_id}:per_transaction", "payment_method", "jurisdiction")  # the rail's own limit (04 §1)
     if (rf := inp.facts.get("recovery.pending")) is not None and rf.value is True:
@@ -294,7 +296,7 @@ def _choose_rail(inp: EvaluationInput, chain: list[Spoke]) -> tuple[RailProfile 
     else:
         permitted = [
             r for r in inp.rails.values()
-            if r.status == "live" and all(_rail_ok(rule, r) for rule, _ in _rules_in_force(inp, chain) if rule.dimension == "payment_method")
+            if r.status == "live" and _offered(inp, r.rail_id) and all(_rail_ok(rule, r) for rule, _ in _rules_in_force(inp, chain) if rule.dimension == "payment_method")
         ]
         if not permitted:
             return None, None
@@ -304,6 +306,13 @@ def _choose_rail(inp: EvaluationInput, chain: list[Spoke]) -> tuple[RailProfile 
     if rail is None or rail.status != "live":
         return None, None
     return rail, by
+
+
+def _offered(inp: EvaluationInput, rail_id: str) -> bool:
+    """False only when a fact says the merchant does not offer the rail. Any fact may block; none is needed to pass,
+    because execution checks the merchant's own list again before placing (04 §3)."""
+    f = inp.facts.get("merchant.rails_offered")
+    return f is None or not isinstance(f.value, (tuple, list, frozenset, set)) or rail_id in f.value
 
 
 def _neg(s: str) -> tuple:

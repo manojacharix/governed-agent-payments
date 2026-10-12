@@ -40,6 +40,20 @@ def test_a_rail_limit_refuses_as_a_jurisdiction_clause():
     assert det.outcome == "refuse" and clause.author == "jurisdiction" and not clause.overridable
 
 
+def test_a_rail_the_merchant_does_not_offer_is_refused_before_approval():
+    inp = scenario(body=body(rail_id="xx:wallet"))
+    offered = Fact("merchant.rails_offered", ("xx:pin",), "merchant", True, "capturer_signed")
+    det = evaluate(replace(inp, facts=inp.facts.with_fact(offered)))
+    assert det.outcome == "refuse" and "sys.rail_not_offered" in ids(det)
+
+
+def test_the_default_rail_is_chosen_among_offered_rails():
+    inp = scenario()
+    offered = Fact("merchant.rails_offered", ("xx:wallet",), "merchant", True, "capturer_signed")
+    det = evaluate(replace(inp, facts=inp.facts.with_fact(offered)))
+    assert det.rail_id == "xx:wallet" and det.rail_chosen_by == "default"
+
+
 def test_agent_may_propose_a_permitted_rail():
     det = evaluate(scenario(body=body(rail_id="xx:wallet")))
     assert det.rail_id == "xx:wallet" and det.rail_chosen_by == "agent"

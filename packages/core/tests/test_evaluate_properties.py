@@ -49,6 +49,7 @@ FACT_POOL = [
     Fact("merchant.categories", TermSet(frozenset({"std:mcc:7995"}), "v", "m"), "anyone", False, "capturer_signed"),
     Fact("merchant.item_attributes.item_milk", TermSet(frozenset({"std:allergen:peanut"}), "v", "m"), "anyone", False, "capturer_signed"),
     Fact("recovery.pending", True, "anyone", False, "injected"),
+    Fact("merchant.rails_offered", ("xx:nothing",), "anyone", False, "capturer_signed"),
 ]
 
 

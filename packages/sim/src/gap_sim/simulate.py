@@ -16,6 +16,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from gap_adapters.execute import Authorisation, ExecutionRefused, Executor
+from gap_adapters.fakes import FakeMerchant
 from gap_core.authority import CartLineTemplate, Caller, Limit, Spoke, StandingInstruction, Wheel, Window
 from gap_core.canonical import canonical
 from gap_core.clock import FixedClock
@@ -50,6 +52,7 @@ class Payer:
     leaves: list  # spoke ids that proposals cite
     callers: dict  # spoke_id -> Caller
     ctx: dict
+    merchant: FakeMerchant = None
 
 
 @dataclass
@@ -79,11 +82,15 @@ class Simulation:
         self.keylog = KeyLog(self.ledger, "sim-host", self.host, self.clock)
         self.keylog.bootstrap()
         self.money = MoneyInFlight(self.ledger, self.host, self.clock, random.Random(seed + 1))
+        self.executor = Executor(self.ledger, self.host, self.clock, random.Random(seed + 2))
         india = load_mapping(ROOT / "mappings/in/v0.1.0.yaml")
         self.personal_ctx = evaluation_context(india, load_tier0(ROOT / "tier0/examples/personal_in.yaml", india))
         self.b2b_ctx = evaluation_context(india, load_tier0(ROOT / "tier0/examples/b2b_procurement_in.yaml", india))
         self.month = Window("calendar_month", "Asia/Kolkata")
         self.payers = [self._payer(i) for i in range(payers)]
+        for p in self.payers:  # each payer shops at a merchant of shape a or b
+            p.merchant = FakeMerchant(self.rng.choice("ab"), self.clock)
+        self.executions: dict = {}   # det_id -> (merchant, cart_ref, attempts)
         self.shadow: dict = {}       # (owner, window_id) -> [held, spent]
         self.limits: dict = {}       # (owner, window_id) -> limit amount
         self.overcaptured: set = set()
@@ -126,29 +133,32 @@ class Simulation:
     # --- one event --------------------------------------------------------------
 
     def _body(self, payer: Payer, spoke: Spoke) -> tuple[ProposalBody, str]:
-        r = self.rng
+        """The proposal is built from the merchant's own cart, as a real agent would read it."""
+        r, m = self.rng, payer.merchant
+        cart_ref = f"cart-{self.report.events}"
+        adapter = m.describe().adapter_id
         if spoke.instruction is not None:
             drift = r.randint(-15, 15)  # percent; beyond +10 the silent ceiling forces a tap
-            lines = (CartLine("item_milk", 2, inr(6000 + 60 * drift)), CartLine("item_bread", 1, inr(4500)))
-            b = ProposalBody("mrc_grocer", "fake-a", f"cart-{r.random()}", lines, inr(sum(l.unit_price.amount_minor * l.quantity for l in lines) + 3000),
-                             "dst_home", 980, fees=(Fee("delivery", inr(3000)),))
-            return b, "std:mcc:5411"
+            m.add_cart(cart_ref, (CartLine("item_milk", 2, inr(6000 + 60 * drift)), CartLine("item_bread", 1, inr(4500))), (Fee("delivery", inr(3000)),))
+            v = m.get_cart(cart_ref)
+            return ProposalBody("mrc_grocer", adapter, cart_ref, v.lines, v.total, "dst_home", 980, fees=v.fees), "std:mcc:5411"
         merchant, category = r.choice(MERCHANTS)
         scale = 50 if payer.kind == "b2b" else 1
         lines = tuple(CartLine(f"item_{r.randint(1, 60)}", r.randint(1, 3), inr(r.randint(20, 1500) * 100 * scale)) for _ in range(r.randint(1, 4)))
-        fees = (Fee("delivery", inr(r.choice([0, 2000, 4000]))),)
-        total = sum(l.unit_price.amount_minor * l.quantity for l in lines) + fees[0].amount.amount_minor
+        m.add_cart(cart_ref, lines, (Fee("delivery", inr(r.choice([0, 2000, 4000]))),))
+        v = m.get_cart(cart_ref)
         rail = r.choice([None, None, None, "in:merchant_wallet", "in:cash_on_delivery", "in:upi_intent"])
-        return ProposalBody(merchant, "fake-a", f"cart-{r.random()}", lines, inr(total), "dst_home", r.randint(820, 1000),
-                            fees=fees, rail_id=rail), category
+        return ProposalBody(merchant, adapter, cart_ref, v.lines, v.total, "dst_home", r.randint(820, 1000),
+                            fees=v.fees, rail_id=rail), category
 
     def _facts(self, payer: Payer, category: str, adversarial: set) -> FactSet:
         r = self.rng
+        offered = Fact("merchant.rails_offered", payer.merchant.describe().rails_offered, "merchant_adapter", True, "capturer_signed")
         verified_cat = r.random() < 0.95
         if not verified_cat:
             adversarial.add("unverified_category")
         facts = [Fact("merchant.categories", TermSet(frozenset({category}), "std:mcc@1", "fake-a@1"), "merchant_adapter", verified_cat, "capturer_signed"),
-                 Fact("notice.delivered", True, "host", r.random() < 0.9, "injected")]
+                 Fact("notice.delivered", True, "host", r.random() < 0.9, "injected"), offered]
         if payer.kind == "b2b":
             x = r.random()
             if x < 0.8:
@@ -240,6 +250,15 @@ class Simulation:
         if det.outcome != "allow":
             return
 
+        # the payer approved what was shown: stage 2 re-checks on fresh facts before any hold (02 Stage 2)
+        det = evaluate(replace(inp, determination_id=det_id + "_auth", stage="authorisation", prior_intents={},
+                               authorised_presented_hash=det.presented_hash))
+        self.ledger.append(payer.wheel.wheel_id, det.to_record(), self.host, record_id=det.determination_id)
+        if det.outcome != "allow":
+            rep.violations.append(f"{det_id}: allowed at proposal but {det.outcome} at authorisation with nothing changed")
+            return
+        det_id = det.determination_id
+
         amount = body.total
         if det.approval_mode == "silent_with_notice":
             bp = spoke.instruction.price_tolerance_bp
@@ -263,33 +282,74 @@ class Simulation:
             self.shadow.setdefault((a.owner, wid_[a.owner]), [0, 0])[0] += amount.amount_minor
         self.payments[det_id] = {"wheel": payer.wheel.wheel_id, "keys": [(a.owner, wid_[a.owner]) for a in accts],
                                  "held": amount.amount_minor, "captured": 0, "refunded": 0, "actual": body.total.amount_minor}
-        y = r.random()
-        if y < 0.03:
-            self.pending.append((at + timedelta(hours=r.randint(1, 48)), "resolve", det_id))
-            rep.settlements["unknown_then_resolved"] += 1
-        else:
-            self._settle(det_id, y)
+        self._execute(payer, det, body, spoke)
 
-    def _settle(self, det_id: str, y: float) -> None:
+    BEHAVIOURS = (["ok"] * 78 + ["decline"] * 6 + ["timeout_after_create"] * 4 + ["timeout_before_create"] * 3
+                  + ["error:RATE_LIMITED"] * 3 + ["error_after_create:RATE_LIMITED"] * 1 + ["processing"] * 2 + ["overcharge"] * 3)
+
+    def _execute(self, payer: Payer, det: Determination, body: ProposalBody, spoke: Spoke) -> None:
+        r, rep, m = self.rng, self.report, payer.merchant
+        script = []
+        for _ in range(3):
+            b = r.choice(self.BEHAVIOURS)
+            script.append(f"overcharge:{r.randint(100, 50_000)}" if b == "overcharge" else b)
+        m.script = script
+        rail = payer.ctx["rails"].get(det.rail_id)
+        auth = Authorisation("standing_instruction") if det.approval_mode == "silent_with_notice" else Authorisation("payer_approval", True)
+        try:
+            if rail is None:
+                raise ExecutionRefused("no rail")
+            res = self.executor.execute(payer.wheel.wheel_id, det, body.merchant_cart_ref, body.destination_ref, rail, m, auth)
+        except ExecutionRefused:
+            rep.settlements["refused_at_execution"] += 1
+            self._release(det.determination_id, "rail")
+            return
+        self.executions[det.determination_id] = (m, body.merchant_cart_ref, len(res.attempts), rail)
+        rep.settlements[f"executed:{res.outcome}"] += 1
+        if res.outcome == "success":
+            self._capture(det.determination_id, res.charged.amount_minor)
+        elif res.outcome == "awaiting_payer":
+            if r.random() < 0.95:  # the payer completes the payment on the rail
+                m.confirm_payment(res.merchant_order_ref)
+                self._capture(det.determination_id, m.get_order(res.merchant_order_ref).charged.amount_minor)
+            else:
+                rep.settlements["payer_abandoned"] += 1
+                self._release(det.determination_id, "rail")
+        elif res.outcome == "failure":
+            self._release(det.determination_id, "rail")
+        else:  # unknown: the hold stays until the merchant's history settles it
+            self.pending.append((self.clock.now() + timedelta(hours=r.randint(1, 48)), "resolve", det.determination_id))
+
+    def _release(self, det_id: str, source: str) -> None:
+        p = self.payments[det_id]
+        self.money.release(p["wheel"], det_id, Signal(source, "definitive-failure"))
+        for k in p["keys"]:
+            self.shadow[k][0] -= p["held"]
+        p["held"] = 0
+
+    def _resolve(self, det_id: str) -> None:
+        """An unknown outcome, settled later from the merchant's own record (reconciliation proper is Phase 6)."""
+        m, cart_ref, _, _ = self.executions[det_id]
+        orders = m.orders_for_cart(cart_ref)
+        rep = self.report
+        if not orders:
+            rep.settlements["resolved:no_order"] += 1
+            return self._release(det_id, "reconciliation")
+        o = orders[0]
+        if o.status in ("PENDING_PAYMENT", "PROCESSING", "processing"):
+            m.confirm_payment(o.merchant_order_ref) if m.shape == "a" else None
+            o = m.get_order(o.merchant_order_ref)
+            charged = o.charged or o.total
+        else:
+            charged = o.charged or o.total
+        rep.settlements["resolved:order_found"] += 1
+        self._capture(det_id, charged.amount_minor)
+
+    def _capture(self, det_id: str, actual: int) -> None:
         p, rep = self.payments[det_id], self.report
         wheel, held = p["wheel"], p["held"]
-        if y < 0.10:
-            self.money.release(wheel, det_id, Signal("rail", "declined"))
-            for k in p["keys"]:
-                self.shadow[k][0] -= held
-            p["held"] = 0
-            rep.settlements["failed"] += 1
-            return
-        if y < 0.17:
-            actual = max(1, p["actual"] - self.rng.randint(1, max(1, p["actual"] // 5)))
-            rep.settlements["lower"] += 1
-        elif y < 0.20:
-            actual = held + self.rng.randint(100, 50_000)
-            rep.settlements["higher"] += 1
-        else:
-            actual = min(p["actual"], held)
-            rep.settlements["as_approved"] += 1
-        self.money.capture(wheel, det_id, inr(actual), Signal("bank", f"stmt-{det_id}"))
+        rep.settlements["as_approved" if actual == p["actual"] else "higher" if actual > held else "lower"] += 1
+        self.money.capture(wheel, det_id, inr(actual), Signal("merchant", f"order-{det_id}"))
         for k in p["keys"]:
             self.shadow[k][0] -= held
             self.shadow[k][1] += actual
@@ -306,7 +366,7 @@ class Simulation:
         for _, action, det_id in sorted(due):
             p = self.payments[det_id]
             if action == "resolve":
-                self._settle(det_id, self.rng.random() * 0.9 + 0.1 if self.rng.random() < 0.85 else 0.0)
+                self._resolve(det_id)
             elif action == "refund" and p["captured"] - p["refunded"] > 0:
                 amt = self.rng.randint(1, p["captured"] - p["refunded"])
                 self.money.refund(p["wheel"], det_id, inr(amt), Signal("merchant", f"refund-{det_id}"))
@@ -351,6 +411,16 @@ class Simulation:
             for rec in self.ledger.records(p.wheel.wheel_id, "posting"):
                 if rec["payment_ref"] not in self.allowed_ids:
                     v.append(f"posting for {rec['payment_ref']}, which was never allowed")
+        for det_id, (m, cart_ref, n_attempts, rail) in self.executions.items():
+            n_orders = len(m.orders_for_cart(cart_ref))
+            if n_orders > 1:
+                v.append(f"{det_id}: {n_orders} merchant orders for one decision")
+            if n_attempts > rail.retry_policy.get("max_retries", 0) + 1:
+                v.append(f"{det_id}: {n_attempts} attempts exceed the rail's retry limit")
+        for p in self.payers:  # every order a merchant holds traces to an allowed decision
+            for o in p.merchant.orders.values():
+                if not any(c == o.cart_ref for (_m, c, _n, _r) in self.executions.values()):
+                    v.append(f"{o.merchant_order_ref}: an order no decision placed")
         for inp, expected in self.samples:
             if canonical(evaluate(inp).to_record()) != expected:
                 v.append(f"{inp.determination_id}: replay gave different bytes")

@@ -242,7 +242,7 @@ ProposalProof {
 
 ### 4.2 System clauses
 Failing clauses not written by an operator or payer use `author = system` and these `rule_id`s:
-`sys.no_spoke`, `sys.spoke_inactive`, `sys.spoke_expired`, `sys.caller_not_bound`, `sys.caller_assurance`, `sys.proof_invalid`, `sys.proof_stale`, `sys.nonce_reused`, `sys.unmodelled_attribute`, `sys.intent_conflict`, `sys.cap_exceeded`, `sys.budget_exceeded`, `sys.open_finding`, `sys.recovery_pending`, `sys.drift`, `sys.no_rail` (no live permitted rail), `sys.usage_unknown` (a usage figure the evaluator needs was not supplied; never assumed zero).
+`sys.no_spoke`, `sys.spoke_inactive`, `sys.spoke_expired`, `sys.caller_not_bound`, `sys.caller_assurance`, `sys.proof_invalid`, `sys.proof_stale`, `sys.nonce_reused`, `sys.unmodelled_attribute`, `sys.intent_conflict`, `sys.cap_exceeded`, `sys.budget_exceeded`, `sys.open_finding`, `sys.recovery_pending`, `sys.drift`, `sys.no_rail` (no live permitted rail), `sys.rail_not_offered` (a fact says the merchant does not accept the chosen rail; found by the Phase 5 simulation), `sys.usage_unknown` (a usage figure the evaluator needs was not supplied; never assumed zero).
 
 **Evaluation semantics fixed while building Phase 2 (12 Oct):**
 - **Validity:** `valid_from ≤ at < valid_until` (the end is exclusive).
@@ -320,6 +320,7 @@ Determination {
 | `merchant.item_attributes.<item_id>` | `TermSet` |
 | `merchant.cart_hash` | `str` (a `Hash`) |
 | `merchant.categories` | `TermSet` |
+| `merchant.rails_offered` | `[str]` (rail IDs the merchant accepts; any fact may block a rail, none is needed to pass) |
 | `destination.first_used_at` | `Timestamp` |
 | `fx.<from>.<to>` | `Ratio` |
 | `recovery.pending` | `bool` |
@@ -384,7 +385,7 @@ RailProfile {
 ```
 ExecutionAttempt {
   attempt_id: Id<exa>, determination_id, rail_id, adapter_id,
-  idempotency_key: Hash,                         hash({determination_id, attempt_number})
+  idempotency_key: Hash,                         hash({determination_id}): the same on every attempt (changed 12 Oct)
   attempt_number: int ≥ 1, request_hash: Hash,   request body in the profile store
   response_status: Ref, outcome: success | failure | unknown,
   merchant_order_ref?: Ref, started_at, ended_at, retry_of?: Id<exa>,
@@ -406,6 +407,12 @@ Every adapter implements these operations; contract tests run the same suite aga
 | `cancel(merchant_order_ref)` | | `{status: Ref}` (only if `supports_cancel`) |
 
 `Coverage {complete: bool, limit_code?: last_n | time_bounded | partial_fields, detail?: int}`.
+
+**Fixed while building Phase 5 (12 Oct):**
+- **One idempotency key per decision,** not per attempt, so a merchant that honours keys deduplicates retries. Doc 19 §7.2 had it per attempt, which would have defeated that.
+- **`describe()` also returns** `honours_idempotency: bool` and `outcomes: {merchant status: success | failure | unknown | awaiting_payer}`. Status meanings are per adapter (`04` §1); `awaiting_payer` is an order created and waiting for the payer to complete payment on the rail (pending-then-confirm).
+- **Prove before retry:** after a timeout or error the executor searches the merchant's history (by idempotency key if the merchant honours keys, else by cart). Found means success. Not found proves absence only when the history is complete; only then, only for errors the rail profile marks safe, and within its limits, does it retry. A merchant's claim to honour idempotency keys is not treated as proof (invariant 20).
+- **The evaluator refuses a rail the merchant does not accept** when a `merchant.rails_offered` fact says so (`sys.rail_not_offered`), and the default rail is chosen among offered rails. Found by the Phase 5 simulation, where 30 approved payments would otherwise have failed at execution.
 Status strings are adapter-specific `Ref`s; the rail profile's `definitive_signals` say which mean success, failure or unknown.
 
 ---
