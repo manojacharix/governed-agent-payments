@@ -49,3 +49,4 @@ END $$;
 REVOKE ALL ON data_keys, profile_records, recovery_secrets FROM PUBLIC;
 GRANT SELECT, INSERT ON data_keys, profile_records, recovery_secrets TO profile_writer;
 GRANT UPDATE (status, wrapped, hold_basis, hold_until, shredded_at) ON data_keys TO profile_writer;
+GRANT UPDATE (argon2_hash) ON recovery_secrets TO profile_writer;   -- the payer may change their answers
