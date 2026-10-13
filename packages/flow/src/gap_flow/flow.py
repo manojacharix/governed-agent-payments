@@ -83,6 +83,7 @@ class Deployment:
     proposal_ttl_s: int = 900
     sweep_before_hold: bool = False
     fact_sources: tuple = ()  # host-side sources (e.g. an ERP): callables(request) -> [Fact], captured by the host
+    executing_grace_s: int = 600  # how long a payment may sit "executing" before recovery asks the merchant what happened
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,7 @@ class Pending:
     notice_delivered: bool = False
     result: object = None
     events: list = field(default_factory=list)
+    executing_since: datetime | None = None  # set at the point of no return; a crash leaves it for recovery
 
 
 def _dump_result(r):
@@ -145,13 +147,13 @@ def dump_pending(p: "Pending") -> dict:
             "request": {f.name: encode(getattr(p.request, f.name)) for f in dataclasses.fields(p.request)},
             "determination": encode(p.determination), "status": p.status, "received_at": encode(p.received_at),
             "notice_until": encode(p.notice_until), "notice_delivered": p.notice_delivered, "result": _dump_result(p.result),
-            "events": [encode(e) for e in p.events]}
+            "events": [encode(e) for e in p.events], "executing_since": encode(p.executing_since)}
 
 
 def load_pending(d: dict) -> "Pending":
     return Pending(d["proposal_id"], d["wheel_id"], ProposalRequest(**{k: decode(v) for k, v in d["request"].items()}),
                    decode(d["determination"]), d["status"], decode(d["received_at"]), decode(d["notice_until"]), d["notice_delivered"],
-                   _load_result(d["result"]), [decode(e) for e in d["events"]])
+                   _load_result(d["result"]), [decode(e) for e in d["events"]], decode(d.get("executing_since", {"$t": "none"})))
 
 
 ACTIVE = ("awaiting_approval", "notice", "executing")
@@ -434,13 +436,16 @@ class Flow:
         """Expiries, silent repeats whose notice has run, due recoveries and sweeps. Each proposal is handled in its own
         unit under its payer's lock and re-read after locking, so two processes ticking at once never act twice."""
         now, out = self.clock.now(), []
-        for seen in self.proposals.where(status=("awaiting_approval", "notice")):
+        for seen in self.proposals.where(status=("awaiting_approval", "notice", "executing")):
             if seen.wheel_id not in self.deployments:
                 continue
             with self.store.unit(self._payer_of_wheel(seen.wheel_id)):
                 p = self.proposals.get(seen.proposal_id)
                 dep = self.deployments[p.wheel_id]
-                if p.status == "awaiting_approval" and now - p.received_at > timedelta(seconds=dep.proposal_ttl_s):
+                if p.status == "executing":
+                    if p.executing_since is None or now - p.executing_since > timedelta(seconds=dep.executing_grace_s):
+                        out.append(self._recover_executing(p))
+                elif p.status == "awaiting_approval" and now - p.received_at > timedelta(seconds=dep.proposal_ttl_s):
                     self._resolve(p, p.determination.determination_id, "expired", "system")
                     p.status = "expired"
                     out.append(p)
@@ -452,6 +457,38 @@ class Flow:
                 with self.store.unit(dep.wheel.payer_ref):
                     self.recon.sweep(wid, dep.adapters, dep.bank, trigger="scheduled")
         return out
+
+    def _recover_executing(self, p: Pending) -> Pending:
+        """A payment stuck "executing" past its grace period: its process died between committing the approval and
+        recording the merchant's answer. Settle it from the ledger and the merchant, never by placing an order."""
+        dep = self.deployments[p.wheel_id]
+        det2 = p.events[-1]  # the authorisation-stage determination the approval executed
+        attempts = [a for a in self.ledger.records(p.wheel_id, "execution_attempt") if a["determination_id"] == det2.determination_id]
+        payment = replay(self.ledger, p.wheel_id).payments.get(det2.determination_id)
+        held = payment is not None and payment.held > 0
+        if attempts:  # the merchant's answer was recorded; only the status update was lost
+            outcome = attempts[-1]["outcome"]
+            if outcome == "failure" and held:
+                self.money.release(p.wheel_id, det2.determination_id, Signal("merchant", "declined"))
+            p.status = "failed" if outcome == "failure" else "executed"
+            p.result = ExecutionResult(outcome, attempts[-1].get("merchant_order_ref"), None, attempts, needs_reconciliation=True)
+            return p
+        rail = dep.ctx["rails"].get(det2.rail_id)
+        adapter = dep.adapters.get(p.request.adapter_id)
+        if not held or rail is None or adapter is None:  # died before the hold: nothing reserved, no order possible
+            p.status = "failed"
+            return p
+        since = (p.executing_since or p.received_at) - timedelta(minutes=1)
+        res, absent = self.executor.recover(p.wheel_id, det2, p.request.cart_ref, p.request.destination_ref, rail, adapter, since)
+        if absent:  # proven never placed: give the room back
+            self.money.release(p.wheel_id, det2.determination_id, Signal("reconciliation", "not-executed"))
+            p.status, p.result = "failed", res
+            return p
+        # found (recorded, reconciliation captures it) or not provable (recorded unknown: reconciliation chases it and
+        # opens a finding if it stays unresolved, so the hold is always explained)
+        self.recon.sweep(p.wheel_id, dep.adapters, dep.bank, trigger="event")
+        p.status, p.result = "executed", res
+        return p
 
     # --- stage 2, hold, execute, reconcile ------------------------------------------------------------
 
@@ -487,7 +524,7 @@ class Flow:
         # The point of no return: commit before money is held or a merchant is called. If the process dies from here on,
         # the proposal stays "executing" (never back to awaiting the payer, so it cannot be approved twice) and
         # reconciliation settles the money from the ledger and the merchant (05).
-        p.status = "executing"
+        p.status, p.executing_since = "executing", self.clock.now()
         self.store.checkpoint()
         if dep.sweep_before_hold:
             self.recon.sweep(p.wheel_id, dep.adapters, dep.bank, trigger="before_hold")

@@ -68,7 +68,7 @@ uv run python tools/simulate.py 42 40 3000           # one long default run with
 
 - **Ten breakages were found and fixed,** plus one more in a fix, caught by a security review. The most serious was concurrent requests corrupting each other's database transactions, now prevented by serialising each host process. Details are in `plan/stress_campaign.md`.
 - **Final sweep on the merged code:** all ten profiles with two seeds each (20 runs, about 29,000 proposals), plus four seeds each of `month_boundary`, `identity_storm` and `burst`. Zero crashes, zero violations.
-- **Durable state (2026-10-13):** the same ten profiles × two seeds on Postgres working state: zero violations, results identical to memory. Restart, cross-process race, concurrent-scheduler and crash tests pass, and mutation checks confirm they fail if the per-payer lock, the version check or the lock's survival across a checkpoint is removed.
+- **Durable state (2026-10-13):** the same ten profiles × two seeds on Postgres working state: zero violations, results identical to memory. Restart, cross-process race, concurrent-scheduler and crash tests pass (including a crash in each window between committing an approval and recording the merchant's answer, with recovery after a grace period), and mutation checks confirm they fail if the per-payer lock, the version check or the lock's survival across a checkpoint is removed.
 - **575 tests pass in memory mode; the flow, API, identity and evidence suites (182 tests) pass again on Postgres state in CI.**
 
 ## What it does not cover

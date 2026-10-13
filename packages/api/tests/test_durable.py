@@ -261,3 +261,131 @@ def test_a_refresh_token_is_spent_by_a_failed_refresh(c):
         idn.refresh_token(tok["refresh_token"], "cli_someone_else")
     with pytest.raises(IdentityError):
         idn.refresh_token(tok["refresh_token"], client)
+
+
+# --- payments stuck "executing" after a crash (side-agent review, 2026-10-13) --------------------------------
+
+def _held(w):
+    from gap_ledger.money import replay
+    return sum(p.held for p in replay(w.flow.ledger, "whl_1").payments.values())
+
+
+def test_a_crash_after_the_hold_does_not_strand_the_money(c, monkeypatch):
+    w = c.w
+    a = api(c.hosts[0])
+    pid = a.post("/v1/wheels/whl_1/proposals", json=P(), headers=H(w)).json()["proposal_id"]
+    ch = a.post(f"/v1/proposals/{pid}/challenges", json={"action": "authorise"}).json()
+    monkeypatch.setattr(c.hosts[0].flow.executor, "execute", lambda *a, **k: (_ for _ in ()).throw(SystemExit("died before calling the merchant")))
+    with pytest.raises(SystemExit):
+        c.hosts[0].payer_act(pid, "approve", w.device.respond(ch))
+    assert _held(w) > 0
+    survivor = c.process(seed=2)
+    w.clock.advance(timedelta(minutes=30))
+    survivor.tick(sweep=True)
+    assert survivor.flow.proposals[pid].status == "failed"
+    assert _held(w) == 0 and w.merchant.place_calls == 0
+
+
+def _crash_approving(c, monkeypatch, target, name):
+    """Approve on the first process, which dies at target.name; return the proposal id."""
+    w = c.w
+    a = api(c.hosts[0])
+    pid = a.post("/v1/wheels/whl_1/proposals", json=P(), headers=H(w)).json()["proposal_id"]
+    ch = a.post(f"/v1/proposals/{pid}/challenges", json={"action": "authorise"}).json()
+
+    def dies(*args, **kw):
+        raise SystemExit(f"process died in {name}")
+    real = getattr(target, name)
+    calls = {"n": 0}
+
+    def first_call_dies(*args, **kw):
+        calls["n"] += 1
+        return dies() if calls["n"] == 1 else real(*args, **kw)
+    monkeypatch.setattr(target, name, first_call_dies)
+    with pytest.raises(SystemExit):
+        c.hosts[0].payer_act(pid, "approve", w.device.respond(ch))
+    assert c.hosts[0].flow.proposals[pid].status == "executing"
+    return pid
+
+
+def _open_findings(w):
+    return [f for f in w.flow.recon.open_findings("whl_1")]
+
+
+def test_a_crash_after_the_merchant_placed_the_order_finds_it_and_never_orders_twice(c, monkeypatch):
+    w = c.w
+    pid = _crash_approving(c, monkeypatch, c.hosts[0].flow.executor, "_record")  # the merchant has the order; the ledger does not
+    assert len(w.merchant.orders) == 1 and _held(w) > 0
+    survivor = c.process(seed=2)
+    w.clock.advance(timedelta(minutes=30))
+    survivor.tick()
+    p = survivor.flow.proposals[pid]
+    assert p.status == "executed" and w.merchant.place_calls == 1
+    attempt = [a for a in w.flow.ledger.records("whl_1", "execution_attempt")][-1]
+    assert attempt["response_status"] == "RECOVERED+FOUND_IN_HISTORY" and attempt["merchant_order_ref"] in w.merchant.orders
+    o = w.merchant.get_order(attempt["merchant_order_ref"])
+    if o.status == "PENDING_PAYMENT":
+        w.merchant.confirm_payment(o.merchant_order_ref)
+        o = w.merchant.get_order(o.merchant_order_ref)
+    w.bank.debit(f"bank-{o.merchant_order_ref}", o.merchant_order_ref, o.charged, w.clock.now())
+    survivor.tick(sweep=True)
+    assert _held(w) == 0  # captured against the bank, as if nothing had happened
+    assert not [f for f in w.flow.recon.findings("whl_1").values() if f["kind"] == "external_order"]  # not mislabelled
+
+
+def test_when_the_merchant_cannot_prove_absence_the_hold_stays_explained_by_a_finding(c, monkeypatch):
+    w = c.w
+    w.merchant.history_last_n = 0  # the merchant's history cannot prove an order is absent
+    pid = _crash_approving(c, monkeypatch, c.hosts[0].flow.executor, "execute")
+    survivor = c.process(seed=2)
+    w.clock.advance(timedelta(minutes=30))
+    survivor.tick()
+    assert survivor.flow.proposals[pid].status == "executed" and _held(w) > 0  # not released on a guess
+    attempt = [a for a in w.flow.ledger.records("whl_1", "execution_attempt")][-1]
+    assert attempt["response_status"] == "RECOVERED+NOT_PROVEN" and attempt["outcome"] == "unknown"
+    w.clock.advance(timedelta(hours=2))
+    survivor.tick(sweep=True)
+    det = survivor.flow.proposals[pid].events[-1].determination_id
+    assert any(f.get("payment_ref") == det for f in _open_findings(w))  # the held money is never unexplained
+
+
+def test_recovery_waits_out_the_grace_period(c, monkeypatch):
+    w = c.w
+    pid = _crash_approving(c, monkeypatch, c.hosts[0].flow.executor, "execute")
+    survivor = c.process(seed=2)
+    w.clock.advance(timedelta(minutes=5))
+    survivor.tick()
+    assert survivor.flow.proposals[pid].status == "executing"  # a slow operation is never cut off
+    w.clock.advance(timedelta(minutes=6))
+    survivor.tick()
+    assert survivor.flow.proposals[pid].status == "failed" and _held(w) == 0
+
+
+def test_a_crash_before_the_hold_just_fails_the_payment(c, monkeypatch):
+    w = c.w
+    pid = _crash_approving(c, monkeypatch, c.hosts[0].flow.money, "hold")
+    survivor = c.process(seed=2)
+    w.clock.advance(timedelta(minutes=30))
+    survivor.tick()
+    assert survivor.flow.proposals[pid].status == "failed" and _held(w) == 0 and w.merchant.place_calls == 0
+
+
+def test_a_crash_after_the_answer_was_recorded_keeps_the_answer(c, monkeypatch):
+    w = c.w
+    pid = _crash_approving(c, monkeypatch, c.hosts[0].flow.recon, "sweep")  # executed and recorded; the status update was lost
+    survivor = c.process(seed=2)
+    w.clock.advance(timedelta(minutes=30))
+    survivor.tick()
+    assert survivor.flow.proposals[pid].status == "executed" and w.merchant.place_calls == 1
+    assert [a["response_status"] for a in w.flow.ledger.records("whl_1", "execution_attempt")] == ["ok"]  # nothing re-asked
+
+
+def test_two_schedulers_recover_a_stuck_payment_once(c, monkeypatch):
+    w = c.w
+    pid = _crash_approving(c, monkeypatch, c.hosts[0].flow.executor, "execute")
+    b, d = c.process(seed=2), c.process(seed=3)
+    w.clock.advance(timedelta(minutes=30))
+    _race([b.tick, d.tick, b.tick, d.tick])
+    assert b.flow.proposals[pid].status == "failed" and _held(w) == 0
+    assert len([a for a in w.flow.ledger.records("whl_1", "execution_attempt")]) == 1
+    assert len([r for r in w.flow.ledger.records("whl_1", "posting") if r["kind"] == "release"]) == 2  # spoke and wheel, once each

@@ -139,6 +139,30 @@ class Executor:
             return result
         return ExecutionResult("unknown", None, None, attempts, needs_reconciliation=True)
 
+    def recover(self, wheel_id: str, det: Determination, cart_ref: str, destination_ref: str, rail: RailProfile,
+                adapter: MerchantAdapter, since) -> tuple[ExecutionResult, bool]:
+        """After a crash between committing an approval and recording the merchant's answer: ask the merchant whether
+        the order exists, by this decision's idempotency key (or cart), and record what is found. Never places an order.
+        Returns (result, proven_absent): proven_absent means the merchant's complete history shows no such order."""
+        info = adapter.describe()
+        key = idempotency_key(det.determination_id)
+        request_hash = hash_value({"cart_ref": cart_ref, "rail_id": rail.rail_id, "destination_ref": destination_ref,
+                                   "idempotency_key": key, "presented_hash": det.fetched_hash or ""})
+        started = self.clock.now()
+        try:
+            found, absent = self._find(adapter, cart_ref, key, since)
+        except (MerchantTimeout, MerchantError):
+            found, absent = None, False
+        if found is not None:
+            outcome = info.outcomes.get(found.status, "unknown")
+            rec = self._record(wheel_id, det, rail, info.adapter_id, 1, key, request_hash, "RECOVERED+FOUND_IN_HISTORY", outcome,
+                               found.merchant_order_ref, started, None)
+            return self._result(outcome, found, [rec], rail), False
+        status = "RECOVERED+NOT_FOUND" if absent else "RECOVERED+NOT_PROVEN"
+        rec = self._record(wheel_id, det, rail, info.adapter_id, 1, key, request_hash, status, "failure" if absent else "unknown",
+                           None, started, None)
+        return ExecutionResult("failure" if absent else "unknown", None, None, [rec], needs_reconciliation=not absent), absent
+
     @staticmethod
     def _result(outcome: str, order: OrderView | None, attempts: list, rail: RailProfile) -> ExecutionResult:
         return ExecutionResult(
