@@ -1,6 +1,7 @@
 """make stress: the full flow under extreme profiles x seeds, in parallel, each on its own throwaway Postgres.
 
-Usage: uv run python tools/stress.py [seeds_per_profile] [events] [profile ...]
+Usage: uv run python tools/stress.py [--durable] [seeds_per_profile] [events] [profile ...]
+--durable keeps working state (proposals, challenges, tokens) in Postgres instead of memory.
 Exit 1 if any run crashes or breaks an invariant.
 """
 
@@ -13,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def one(profile: str, seed: int, events: int) -> dict:
+def one(profile: str, seed: int, events: int, durable: bool = False) -> dict:
     import psycopg
     from gap_ledger.pgtemp import LEDGER_SQL, TempCluster
     from gap_sim.flow_sim import PROFILES, run
@@ -26,15 +27,22 @@ def one(profile: str, seed: int, events: int) -> dict:
         lc.execute("SET ROLE ledger_writer")
         pc = psycopg.connect(pg.fresh_db("tp", "sp"), autocommit=True)
         pc.execute("SET ROLE profile_writer")
+        store = None
+        if durable:
+            from gap_state.store import PgStore
+            pg.create_template("ts", sorted((ROOT / "packages/state/src/gap_state/sql").glob("*.sql")))
+            sc = psycopg.connect(pg.fresh_db("ts", "ss"), autocommit=True)
+            sc.execute("SET ROLE state_writer")
+            store = PgStore(sc)
         rep = run(lc, pc, seed=seed, payers=30, events=events, minutes_per_event=max(1, 45 * 1440 // events), bundles=20,
-                  profile=PROFILES[profile])
-        return {"profile": profile, "seed": seed, "secs": time.perf_counter() - t0, "proposals": rep.proposals, "records": rep.records,
+                  profile=PROFILES[profile], store=store)
+        return {"profile": profile + (" (pg)" if durable else ""), "seed": seed, "secs": time.perf_counter() - t0, "proposals": rep.proposals, "records": rep.records,
                 "statuses": dict(rep.statuses), "findings": dict(rep.findings), "bundles": dict(rep.bundles),
                 "violations": rep.violations, "crash": None}
     except Exception as e:
         frames = [f for f in traceback.extract_tb(e.__traceback__) if "/packages/" in f.filename]
         where = [f"{f.filename.split('/packages/')[1]}:{f.lineno} {f.name}" for f in frames[-4:]]
-        return {"profile": profile, "seed": seed, "secs": time.perf_counter() - t0, "crash": f"{type(e).__name__}: {e}"[:300], "where": where,
+        return {"profile": profile + (" (pg)" if durable else ""), "seed": seed, "secs": time.perf_counter() - t0, "crash": f"{type(e).__name__}: {e}"[:300], "where": where,
                 "violations": []}
     finally:
         pg.stop()
@@ -42,10 +50,13 @@ def one(profile: str, seed: int, events: int) -> dict:
 
 if __name__ == "__main__":
     from gap_sim.flow_sim import PROFILES
-    seeds = int(sys.argv[1]) if len(sys.argv) > 1 else 2
-    events = int(sys.argv[2]) if len(sys.argv) > 2 else 1500
-    profiles = sys.argv[3:] or list(PROFILES)
-    jobs = [(p, 1000 + 17 * i, events) for p in profiles for i in range(seeds)]
+    args = sys.argv[1:]
+    durable = "--durable" in args
+    args = [a for a in args if a != "--durable"]
+    seeds = int(args[0]) if len(args) > 0 else 2
+    events = int(args[1]) if len(args) > 1 else 1500
+    profiles = args[2:] or list(PROFILES)
+    jobs = [(p, 1000 + 17 * i, events, durable) for p in profiles for i in range(seeds)]
     bad = 0
     with ProcessPoolExecutor(max_workers=6) as ex:
         for fut in as_completed([ex.submit(one, *j) for j in jobs]):

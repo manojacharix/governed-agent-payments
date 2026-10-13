@@ -21,9 +21,10 @@ gap-flow = { workspace = true }
 gap-evidence = { workspace = true }
 gap-identity = { workspace = true }
 gap-api = { workspace = true }
+gap-state = { workspace = true }
 
 [dependency-groups]
-dev = ["pytest>=8", "hypothesis>=6", "gap-core", "gap-keys", "gap-mapping", "gap-ledger", "gap-profile", "gap-sim", "gap-adapters", "gap-recon", "gap-flow", "gap-evidence", "gap-identity", "gap-api"]
+dev = ["pytest>=8", "hypothesis>=6", "gap-core", "gap-keys", "gap-mapping", "gap-ledger", "gap-profile", "gap-sim", "gap-adapters", "gap-recon", "gap-flow", "gap-evidence", "gap-identity", "gap-api", "gap-state"]
 
 [tool.pytest.ini_options]
 testpaths = ["packages"]

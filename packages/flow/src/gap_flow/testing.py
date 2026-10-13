@@ -90,7 +90,10 @@ class World:
         self.bank.debit(f"bank-{o.merchant_order_ref}", o.merchant_order_ref, o.charged, self.clock.now())
 
 
-def make_world(ledger, profile_conn, *, evaluator_digest: str = "sha256:" + "e" * 64) -> World:
+STORE_FACTORY = None  # set by the test suite (GAP_STATE=pg) to run every world on durable Postgres state
+
+
+def make_world(ledger, profile_conn, *, evaluator_digest: str = "sha256:" + "e" * 64, store=None) -> World:
     import base64
     import hashlib
 
@@ -98,7 +101,8 @@ def make_world(ledger, profile_conn, *, evaluator_digest: str = "sha256:" + "e" 
     host = LocalSigner.generate("key_host")
     keylog = KeyLog(ledger, "host", host, clock)
     keylog.bootstrap()
-    identity = Identity(ledger, keylog, clock, scale=SCALE, params=ID_PARAMS, host_ref="host", secrets_conn=profile_conn)
+    store = store or (STORE_FACTORY() if STORE_FACTORY else None)
+    identity = Identity(ledger, keylog, clock, scale=SCALE, params=ID_PARAMS, host_ref="host", secrets_conn=profile_conn, store=store)
     device = Device("key_phone")
     identity.enrol_first_surface("pyr_1", device.key_id, device.public_jwk)
     # an agent (OAuth, session-bound) and the scheduler (key-bound), each enrolled only on the payer's approval
@@ -113,7 +117,8 @@ def make_world(ledger, profile_conn, *, evaluator_digest: str = "sha256:" + "e" 
     e2 = identity.request_caller("pyr_1", public_jwk=scheduler.signer.public_jwk)
     scheduler.caller_id = identity.approve_caller(e2["enrolment_id"], device.respond(
         identity.challenge(payer_ref="pyr_1", action="enrol", subject_hash=e2["subject_hash"])))["caller_id"]
-    flow = Flow(ledger, ProfileStore(profile_conn, LocalKek.generate(), clock), keylog, identity, clock, random.Random(1), evaluator_digest=evaluator_digest)
+    flow = Flow(ledger, ProfileStore(profile_conn, LocalKek.generate(), clock), keylog, identity, clock, random.Random(1),
+                evaluator_digest=evaluator_digest, store=store)
     m = XXMerchant("b", clock)
     ins = StandingInstruction("mrc_shop", "fake-b", (CartLineTemplate("item_milk", 2), CartLineTemplate("item_bread", 1)), "dst_home", "xx:wallet", 1000, inr(19000))
     spokes = {

@@ -20,7 +20,10 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
+import functools
 import hashlib
+import inspect
 import secrets
 import unicodedata
 from dataclasses import dataclass, field
@@ -32,12 +35,14 @@ from argon2.exceptions import VerifyMismatchError
 from gap_core.authority import Caller
 from gap_core.canonical import canonical
 from gap_core.clock import Clock
+from gap_core.codec import decode, encode
 from gap_core.hashing import hash_value
 from gap_core.ids import new_id
 from gap_core.signatures import SignatureError, b64url_decode, public_key_from_jwk, verify
 from gap_core.timefmt import format_ts, parse_ts
 from gap_ledger.keylog import KeyLog
 from gap_ledger.ledger import Ledger
+from gap_state.store import Kind, MemoryStore
 
 from .webauthn import WebAuthnError, verify_assertion as verify_webauthn
 
@@ -65,6 +70,41 @@ def _redirect_ok(uri) -> bool:
     if u.scheme == "https":
         return True
     return u.scheme == "http" and host in ("127.0.0.1", "localhost", "::1")
+
+def sha(secret: str) -> str:
+    """Secrets (codes, tokens) are stored and looked up by their SHA-256, never in clear."""
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def dc_dump(o) -> dict:
+    return {f.name: encode(getattr(o, f.name)) for f in dataclasses.fields(o)}
+
+
+def dc_loader(cls):
+    return lambda d: cls(**{k: decode(v) for k, v in d.items()})
+
+
+def atomic(scope=None):
+    """Run the method as one unit of work, holding the lock of the payer scope(self, args) names."""
+    def deco(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def wrapper(self, *a, **kw):
+            s = None
+            if scope is not None:
+                args = sig.bind(self, *a, **kw)
+                args.apply_defaults()
+                s = scope(self, args.arguments)
+            with self.store.unit(s):
+                return fn(self, *a, **kw)
+        return wrapper
+    return deco
+
+
+def _payer(self, a):
+    return a["payer_ref"]
+
 
 class IdentityError(RuntimeError):
     """An identity check failed. `reason` is a short machine-readable code."""
@@ -96,9 +136,15 @@ class Recovery:
     status: str = "pending"
 
 
+def _dict_kind(name, *, scope=lambda d: d.get("payer_ref", ""), status=lambda d: "", expires=lambda d: None):
+    return Kind(name, encode, decode, scope=scope, status=status, expires=expires)
+
+
 class Identity:
+    """Identity state lives in a Store (gap_state): in memory by default, or Postgres so several host processes share it."""
+
     def __init__(self, ledger: Ledger, keylog: KeyLog, clock: Clock, *, scale, params: dict, host_ref: str,
-                 rp_id: str = "gap.example", origin: str = "https://gap.example", secrets_conn=None, attestation=None) -> None:
+                 rp_id: str = "gap.example", origin: str = "https://gap.example", secrets_conn=None, attestation=None, store=None) -> None:
         self.ledger, self.keylog, self.clock = ledger, keylog, clock
         self.scale = [(lvl.level, lvl.requires) for lvl in scale]
         self.params, self.rp_id, self.origin = params, rp_id, origin
@@ -107,18 +153,31 @@ class Identity:
         self.attestation = attestation  # callable(attestation_blob) -> protection class, for real platforms
         self._rng = secrets.SystemRandom()
         self._ph = PasswordHasher()
-        self.challenges: dict[str, dict] = {}
-        self.used_challenges: set[str] = set()
-        self.clients: dict[str, dict] = {}
-        self.enrolments: dict[str, dict] = {}
-        self.callers: dict[str, CallerState] = {}
-        self.codes: dict[str, dict] = {}
-        self.tokens: dict[str, dict] = {}   # sha256(token) -> grant
-        self.refresh: dict[str, dict] = {}
-        self.recoveries: dict[str, Recovery] = {}
-        self.failures: dict[str, list] = {}
-        self.suspended_payers: dict[str, str] = {}
-        self.notices: list[tuple[str, str]] = []  # (payer_ref, message): delivery is the product's job
+        self.store = store or MemoryStore()
+        t, exp = self.store.table, lambda field: (lambda d: d.get(field) if isinstance(d.get(field), datetime) else None)
+        self.challenges = t(_dict_kind("challenge", status=lambda d: "used" if d.get("used") else "", expires=lambda d: parse_ts(d["expires_at"])))
+        self.clients = t(_dict_kind("client"))
+        self.enrolments = t(_dict_kind("enrolment", status=lambda d: d["status"]))
+        self.callers = t(Kind("caller", dc_dump, dc_loader(CallerState), scope=lambda c: c.payer_ref, status=lambda c: c.status))
+        self.codes = t(_dict_kind("code", expires=exp("expires")))        # sha256(code) -> pending grant
+        self.tokens = t(_dict_kind("token", expires=exp("expires")))      # sha256(token) -> grant
+        self.refresh = t(_dict_kind("refresh"))                            # sha256(refresh token) -> grant
+        self.recoveries = t(Kind("recovery", dc_dump, dc_loader(Recovery), scope=lambda r: r.payer_ref, status=lambda r: r.status))
+        self.failures = t(_dict_kind("failure"))            # payer_ref -> {"payer_ref", "at": [times of wrong answers]}
+        self.suspended_payers = t(_dict_kind("suspension"))  # payer_ref -> {"payer_ref", "reason"}
+        self._notices = t(_dict_kind("notice"))  # delivery is the product's job
+
+    @property
+    def notices(self) -> list[tuple[str, str]]:
+        return [(n["payer_ref"], n["message"]) for n in sorted(self._notices.values(), key=lambda n: n["notice_id"])]
+
+    def _notify(self, payer_ref: str, message: str) -> None:
+        nid = new_id("ntc", clock=self.clock, rng=self._rng)
+        self._notices[nid] = {"notice_id": nid, "payer_ref": payer_ref, "message": message, "at": format_ts(self._now())}
+
+    @atomic(lambda self, a: self.enrolments.scope_of(a["enrolment_id"]))
+    def enrolment(self, enrolment_id: str) -> dict | None:
+        return self.enrolments.get(enrolment_id)
 
     # --- small helpers -----------------------------------------------------------------------
 
@@ -152,12 +211,13 @@ class Identity:
 
     # --- challenges and assertions ------------------------------------------------------------
 
+    @atomic(_payer)
     def challenge(self, *, payer_ref: str, action: str, subject_hash: str, ttl_s: int = 300) -> dict:
         cid = new_id("chl", clock=self.clock, rng=self._rng)
         ch = {"challenge_id": cid, "nonce": base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode(),
               "action": action, "subject_hash": subject_hash, "payer_ref": payer_ref,
               "issued_at": format_ts(self._now()), "expires_at": format_ts(self._now() + timedelta(seconds=ttl_s))}
-        self.challenges[cid] = ch
+        self.challenges[cid] = dict(ch)
         self._record({"record_type": "challenge", **ch}, cid)
         return ch
 
@@ -165,6 +225,7 @@ class Identity:
     def challenge_bytes(ch: dict) -> bytes:
         return hashlib.sha256(canonical({k: ch[k] for k in ("challenge_id", "nonce", "action", "subject_hash")})).digest()
 
+    @atomic(_payer)
     def verify_assertion(self, assertion: dict, *, payer_ref: str, action: str, subject_hash: str,
                          required: str | None = None, roles: tuple = ("surface",)) -> dict:
         """Check an assertion against its challenge, key, signature and strength. Consumes the challenge."""
@@ -174,7 +235,7 @@ class Identity:
         ch = self.challenges.get(cid)
         if ch is None:
             raise IdentityError("no_challenge")
-        if cid in self.used_challenges:
+        if ch.get("used"):
             raise IdentityError("challenge_reused")
         if self._now() > parse_ts(ch["expires_at"]):
             raise IdentityError("challenge_expired")
@@ -202,7 +263,8 @@ class Identity:
         achieved = self.strength(key.protection_class, uv)
         if required:
             self._need(achieved, required)
-        self.used_challenges.add(cid)
+        ch["used"] = True
+        self.store.checkpoint()  # consumed for good, even if the rest of the operation fails or the process dies
         aid = new_id("asr", clock=self.clock, rng=self._rng)
         self._record({"record_type": "surface_assertion", "assertion_id": aid, "challenge_id": cid, "key_id": key.key_id, "action": action,
                       "subject_hash": subject_hash, "user_verification": uv or "none", "auth_strength_achieved": achieved}, aid)
@@ -216,6 +278,7 @@ class Identity:
             raise IdentityError("protection_too_low", f"{cls} < {self.params['identity.surface.min_assurance']}")
         return cls
 
+    @atomic(_payer)
     def enrol_first_surface(self, payer_ref: str, key_id: str, public_jwk: dict, *, attestation=None, user_verification="inherence") -> None:
         """Onboarding: the payer's first device. Only when the payer has no surface yet."""
         if self._payer_surfaces(payer_ref):
@@ -228,6 +291,7 @@ class Identity:
     def key_subject(key_id: str, public_jwk: dict, role: str) -> str:
         return hash_value({"key_id": key_id, "public_key": public_jwk, "role": role})
 
+    @atomic(_payer)
     def enrol_key(self, payer_ref: str, key_id: str, public_jwk: dict, approval: dict, *, role: str = "surface", attestation=None) -> None:
         """A further surface, or a recovery-only key, approved by an existing active surface."""
         if role not in ("surface", "recovery_key"):
@@ -239,6 +303,7 @@ class Identity:
 
     # --- callers: enrolment, OAuth 2.1 + PKCE, proposal proofs -------------------------------------------
 
+    @atomic()
     def register_client(self, client_name: str, redirect_uri: str) -> str:
         """Dynamic client registration. The name is a claim, recorded and never trusted. Redirects go to https, or to
         loopback for native apps (RFC 8252); nothing else (javascript:, data:, plain http to a remote host)."""
@@ -251,6 +316,7 @@ class Identity:
         self._record({"record_type": "client_registration", "client_id": cid, "claimed_name_hash": hash_value(client_name)}, cid)
         return cid
 
+    @atomic(_payer)
     def request_caller(self, payer_ref: str, *, client_id: str | None = None, public_jwk: dict | None = None) -> dict:
         if (client_id is None) == (public_jwk is None):
             raise IdentityError("bad_request", "a caller brings either a key (key_bound) or an OAuth client (session_bound)")
@@ -268,6 +334,7 @@ class Identity:
         self._record({"record_type": "enrolment", "enrolment_id": eid, "kind": "caller", "status": "pending", "subject_hash": e["subject_hash"]}, eid)
         return e
 
+    @atomic(lambda self, a: self.enrolments.scope_of(a["enrolment_id"]))
     def approve_caller(self, enrolment_id: str, approval: dict, *, code_challenge: str | None = None) -> dict:
         e = self.enrolments.get(enrolment_id)
         if e is None or e["status"] != "pending":
@@ -286,15 +353,16 @@ class Identity:
                 raise IdentityError("pkce_required", "OAuth 2.1 requires PKCE")
             self.callers[caller_id] = CallerState(caller_id, e["payer_ref"], "session_bound", None, until)
             code = secrets.token_urlsafe(32)
-            self.codes[code] = {"caller_id": caller_id, "client_id": e["client_id"], "challenge": code_challenge,
-                                "expires": self._now() + timedelta(minutes=5)}
+            self.codes[sha(code)] = {"caller_id": caller_id, "payer_ref": e["payer_ref"], "client_id": e["client_id"],
+                                     "challenge": code_challenge, "expires": self._now() + timedelta(minutes=5)}
             out = {"caller_id": caller_id, "code": code}
         self._record({"record_type": "caller", "caller_id": caller_id, "assurance": self.callers[caller_id].assurance,
                       "valid_until": format_ts(until), "enrolled_by": info["assertion_id"], "status": "active"}, caller_id)
         return out
 
+    @atomic(lambda self, a: self.codes.scope_of(sha(a["code"])) if isinstance(a["code"], str) else None)
     def token(self, code: str, code_verifier: str, client_id: str) -> dict:
-        c = self.codes.pop(code, None)  # single use
+        c = self.codes.pop(sha(code), None)  # single use
         if c is None or c["client_id"] != client_id or self._now() > c["expires"]:
             raise IdentityError("invalid_grant")
         expected = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b"=").decode()
@@ -304,12 +372,14 @@ class Identity:
 
     def _issue(self, caller_id: str, client_id: str) -> dict:
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        self.tokens[hashlib.sha256(access.encode()).hexdigest()] = {"caller_id": caller_id, "expires": self._now() + timedelta(minutes=15)}
-        self.refresh[hashlib.sha256(refresh.encode()).hexdigest()] = {"caller_id": caller_id, "client_id": client_id}
+        payer = self.callers[caller_id].payer_ref
+        self.tokens[sha(access)] = {"caller_id": caller_id, "payer_ref": payer, "expires": self._now() + timedelta(minutes=15)}
+        self.refresh[sha(refresh)] = {"caller_id": caller_id, "payer_ref": payer, "client_id": client_id}
         return {"access_token": access, "refresh_token": refresh, "expires_in": 900, "token_type": "Bearer"}
 
+    @atomic(lambda self, a: self.refresh.scope_of(sha(a["refresh"])) if isinstance(a["refresh"], str) else None)
     def refresh_token(self, refresh: str, client_id: str) -> dict:
-        r = self.refresh.pop(hashlib.sha256(refresh.encode()).hexdigest(), None)  # rotation: each refresh token works once
+        r = self.refresh.pop(sha(refresh), None)  # rotation: each refresh token works once
         if r is None or r["client_id"] != client_id or self.callers[r["caller_id"]].status != "active":
             raise IdentityError("invalid_grant")
         return self._issue(r["caller_id"], client_id)
@@ -318,6 +388,7 @@ class Identity:
     def proof_payload(p: dict) -> bytes:
         return canonical({k: p[k] for k in ("caller_id", "intent_id", "nonce", "created_at", "digest")})
 
+    @atomic(_payer)
     def authenticate_proposal(self, proof: dict, *, payer_ref: str, intent_id: str, digest: str) -> Caller:
         """07 §4.2: who is proposing, proven. Returns the core Caller with its assurance, or raises with a sys.* reason."""
         now = self._now()
@@ -327,7 +398,7 @@ class Identity:
             raise IdentityError("sys.proof_invalid", "nonce or token too long")
         fmt = proof.get("format")
         if fmt == "bearer_session":
-            grant = self.tokens.get(hashlib.sha256(proof.get("token", "").encode()).hexdigest())
+            grant = self.tokens.get(sha(proof.get("token", "")))
             if grant is None or now > grant["expires"]:
                 raise IdentityError("sys.proof_invalid", "unknown or expired token")
             caller_id = grant["caller_id"]
@@ -361,6 +432,7 @@ class Identity:
         c.nonces[nonce] = now
         return Caller(caller_id, c.assurance)
 
+    @atomic(lambda self, a: self.callers.scope_of(a["caller_id"]))
     def rotate_caller_key(self, caller_id: str, new_key_id: str, new_jwk: dict, signed_by_old: str) -> None:
         """A key-bound caller rotates: the new key is signed by the old one. Spokes bind caller_id, so nothing breaks."""
         c = self.callers[caller_id]
@@ -373,6 +445,7 @@ class Identity:
         self.keylog.retire(c.key_id)
         c.key_id = new_key_id
 
+    @atomic(lambda self, a: self.callers.scope_of(a["caller_id"]))
     def suspend_caller(self, caller_id: str) -> None:
         self.callers[caller_id].status = "suspended"
 
@@ -382,6 +455,7 @@ class Identity:
     def _norm(answer: str) -> str:
         return " ".join(unicodedata.normalize("NFKC", answer).casefold().split())
 
+    @atomic(_payer)
     def set_recovery_questions(self, payer_ref: str, answers: list[str], approval: dict) -> None:
         if len(answers) != 3 or any(len(self._norm(a)) < 3 for a in answers):
             raise IdentityError("bad_answers", "three answers, each at least three characters")
@@ -394,9 +468,10 @@ class Identity:
                     " ON CONFLICT (payer_ref, slot) DO UPDATE SET argon2_hash = EXCLUDED.argon2_hash",
                     (payer_ref, slot, self._ph.hash(self._norm(a))))
 
+    @atomic(_payer)
     def check_answers(self, payer_ref: str, answers: list[str]) -> bool:
         now = self._now()
-        recent = [t for t in self.failures.get(payer_ref, []) if now - t < LOCKOUT]
+        recent = [t for t in self.failures.get(payer_ref, {"at": []})["at"] if now - t < LOCKOUT]
         if len(recent) >= MAX_ANSWER_FAILURES:
             raise IdentityError("locked", "too many wrong answers; try again in 24 hours")
         rows = self.secrets_conn.execute("SELECT slot, argon2_hash FROM recovery_secrets WHERE payer_ref = %s ORDER BY slot", (payer_ref,)).fetchall()
@@ -408,9 +483,9 @@ class Identity:
                 ok = False
         if not ok:
             recent.append(now)
-            self.failures[payer_ref] = recent
+            self.failures[payer_ref] = {"payer_ref": payer_ref, "at": recent}
             if len(recent) >= MAX_ANSWER_FAILURES:
-                self.notices.append((payer_ref, "recovery locked after five wrong answers"))
+                self._notify(payer_ref, "recovery locked after five wrong answers")
         return ok
 
     # --- recovery ---------------------------------------------------------------------------------
@@ -419,6 +494,7 @@ class Identity:
     def recovery_subject(new_key_id: str, new_jwk: dict) -> str:
         return hash_value({"recover_to": new_key_id, "public_key": new_jwk})
 
+    @atomic(_payer)
     def start_recovery(self, payer_ref: str, *, new_key_id: str, new_jwk: dict, new_key_user_verification: str, answers: list[str],
                        recovery_key_assertion: dict | None = None, external_verified: bool = False) -> Recovery:
         if not self.check_answers(payer_ref, answers):
@@ -440,14 +516,16 @@ class Identity:
         self.recoveries[rid] = r
         self._record({"record_type": "recovery_case", "recovery_id": rid, "path": path, "status": "pending",
                       "completes_at": format_ts(r.completes_at), "factors": ["knowledge", "inherence"] + (["possession"] if path == "with_recovery_key" else ["external"])}, rid)
-        self.notices.append((payer_ref, f"recovery started ({path})"))
+        self._notify(payer_ref, f"recovery started ({path})")
         if delay == 0:
             self._complete(r)
         return r
 
+    @atomic(_payer)
     def recovery_pending(self, payer_ref: str) -> bool:
-        return any(r.payer_ref == payer_ref and r.status == "pending" for r in self.recoveries.values())
+        return bool(self.recoveries.where(scope=payer_ref, status=("pending",)))
 
+    @atomic(lambda self, a: self.recoveries.scope_of(a["recovery_id"]))
     def cancel_recovery(self, recovery_id: str, assertion: dict) -> None:
         r = self.recoveries.get(recovery_id)
         if r is None or r.status != "pending":
@@ -465,32 +543,44 @@ class Identity:
         r.status = "completed"
         self.suspended_payers.pop(r.payer_ref, None)
         self._record({"record_type": "recovery_case", "recovery_id": r.recovery_id, "status": "completed"}, r.recovery_id)
-        self.notices.append((r.payer_ref, "recovery completed; every old device was removed"))
+        self._notify(r.payer_ref, "recovery completed; every old device was removed")
 
     def tick(self) -> None:
-        for r in list(self.recoveries.values()):
-            if r.status == "pending" and self._now() >= r.completes_at:
-                self._complete(r)
+        """Complete delayed recoveries that are due: each in its own unit, under its payer's lock, re-read after locking."""
+        for due in self.recoveries.where(status=("pending",)):
+            with self.store.unit(due.payer_ref):
+                r = self.recoveries.get(due.recovery_id)
+                if r is not None and r.status == "pending" and self._now() >= r.completes_at:
+                    self._complete(r)
 
     # --- compromise and suspension ----------------------------------------------------------------
 
+    def _key_scope(self, key_id: str) -> str | None:
+        key = self.keylog.state().get(key_id)
+        if key is None:
+            return None
+        return key.principal_ref if key.principal_role != "caller" else self.callers.scope_of(key.principal_ref)
+
+    @atomic(lambda self, a: self._key_scope(a['key_id']))
     def report_compromise(self, key_id: str, since: datetime) -> str:
         key = self.keylog.state().get(key_id)
         if key is None:
             raise IdentityError("unknown_key")
         self.keylog.compromise(key_id, since)
         if key.principal_role == "surface":
-            self.suspended_payers[key.principal_ref] = f"surface key {key_id} compromised"
-            self.notices.append((key.principal_ref, "a device key was reported compromised; payments are suspended"))
+            self.suspended_payers[key.principal_ref] = {"payer_ref": key.principal_ref, "reason": f"surface key {key_id} compromised"}
+            self._notify(key.principal_ref, "a device key was reported compromised; payments are suspended")
             return "wheel_suspended"
         if key.principal_role == "caller" and key.principal_ref in self.callers:
             self.suspend_caller(key.principal_ref)
             return "caller_suspended"
         return "recorded"
 
+    @atomic(_payer)
     def wheel_suspended(self, payer_ref: str) -> bool:
         return payer_ref in self.suspended_payers
 
+    @atomic(_payer)
     def resume(self, payer_ref: str, assertion: dict) -> None:
         self.verify_assertion(assertion, payer_ref=payer_ref, action="wheel_event", subject_hash=hash_value({"resume": payer_ref}),
                               required="auth.strength.resume")

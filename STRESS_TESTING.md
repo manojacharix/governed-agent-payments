@@ -68,11 +68,12 @@ uv run python tools/simulate.py 42 40 3000           # one long default run with
 
 - **Ten breakages were found and fixed,** plus one more in a fix, caught by a security review. The most serious was concurrent requests corrupting each other's database transactions, now prevented by serialising each host process. Details are in `plan/stress_campaign.md`.
 - **Final sweep on the merged code:** all ten profiles with two seeds each (20 runs, about 29,000 proposals), plus four seeds each of `month_boundary`, `identity_storm` and `burst`. Zero crashes, zero violations.
-- **555 tests pass.**
+- **Durable state (2026-10-13):** the same ten profiles × two seeds on Postgres working state: zero violations, results identical to memory. Restart, cross-process race, concurrent-scheduler and crash tests pass, and mutation checks confirm they fail if the per-payer lock, the version check or the lock's survival across a checkpoint is removed.
+- **575 tests pass in memory mode; the flow, API, identity and evidence suites (182 tests) pass again on Postgres state in CI.**
 
 ## What it does not cover
 
-- **More than one host process.** Proposals, challenges and tokens are held in memory. Running several processes behind a load balancer needs that state in Postgres first; until then the per-process lock is what makes concurrency safe.
+- **Real separate machines.** Since 2026-10-13 working state can live in Postgres (`gap_state`), and tests run several host processes against one database: restarts, approvals racing across processes, schedulers ticking at once, a crash at the point of no return. `tools/stress.py --durable` runs every profile on Postgres state (all clean, identical results to memory). Those "processes" share one machine and one Postgres; network partitions and database failover are not simulated.
 - **Rate limiting.** Per-caller limits belong at the deployment edge (a gateway), not in the layer.
 - **Real merchants and banks.** The fakes are synthetic. Real adapters will fail in ways these profiles only approximate.
 - **Performance and load.** These runs test correctness under stress, not throughput or latency targets.

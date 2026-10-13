@@ -12,7 +12,7 @@ from .clock import Clock
 
 PREFIXES = frozenset({
     "whl", "spk", "rul", "evt", "rcp", "prp", "det", "res", "pst", "txg", "exa", "swp", "fnd",
-    "bnd", "rls", "key", "chl", "asr", "clr", "enr", "rcv", "pyr", "opr", "mrc", "dst", "prf",
+    "bnd", "rls", "key", "chl", "asr", "clr", "enr", "rcv", "pyr", "opr", "mrc", "dst", "prf", "ntc",
 })
 _ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"  # Crockford base32, lowercase
 _ID = re.compile(r"([a-z]{3})_([0-7][0-9abcdefghjkmnpqrstvwxyz]{25})")

@@ -1,6 +1,7 @@
 """Shared fixtures: one throwaway Postgres per test session, a fresh database per test (from templates)."""
 
 import itertools
+import os
 from pathlib import Path
 
 import psycopg
@@ -17,6 +18,7 @@ def pg():
     cluster = TempCluster()
     cluster.create_template("tmpl_ledger", LEDGER_SQL)
     cluster.create_template("tmpl_profile", sorted((ROOT / "packages/profile/src/gap_profile/sql").glob("*.sql")))
+    cluster.create_template("tmpl_state", sorted((ROOT / "packages/state/src/gap_state/sql").glob("*.sql")))
     yield cluster
     cluster.stop()
 
@@ -46,9 +48,43 @@ def admin(ledger_dsn):
 
 
 @pytest.fixture
-def profile_conn(pg):
-    dsn = pg.fresh_db("tmpl_profile", f"profile_{next(_counter)}")
-    conn = psycopg.connect(dsn, autocommit=True)
+def profile_dsn(pg):
+    return pg.fresh_db("tmpl_profile", f"profile_{next(_counter)}")
+
+
+@pytest.fixture
+def profile_conn(profile_dsn):
+    conn = psycopg.connect(profile_dsn, autocommit=True)
     conn.execute("SET ROLE profile_writer")
     yield conn
     conn.close()
+
+
+def fresh_state(pg):
+    """A PgStore on its own fresh state database, connected as the least-privileged state role."""
+    from gap_state.store import PgStore
+
+    conn = psycopg.connect(pg.fresh_db("tmpl_state", f"state_{next(_counter)}"), autocommit=True)
+    conn.execute("SET ROLE state_writer")
+    return PgStore(conn)
+
+
+@pytest.fixture
+def state_dsn(pg):
+    return pg.fresh_db("tmpl_state", f"state_{next(_counter)}")
+
+
+@pytest.fixture(autouse=True)
+def _durable_state(request, monkeypatch):
+    """GAP_STATE=pg runs every shared test world on durable Postgres state instead of memory."""
+    if os.environ.get("GAP_STATE") == "pg":
+        import gap_flow.testing
+
+        cluster = request.getfixturevalue("pg")
+        made = []
+        monkeypatch.setattr(gap_flow.testing, "STORE_FACTORY", lambda: made.append(fresh_state(cluster)) or made[-1])
+        yield
+        for st in made:
+            st.conn.close()
+    else:
+        yield

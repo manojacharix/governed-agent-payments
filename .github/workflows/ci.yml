@@ -10,3 +10,5 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --python 3.13
       - run: uv run pytest
+      - name: flow, API, identity and evidence tests again on durable Postgres state
+        run: GAP_STATE=pg uv run pytest packages/flow packages/api packages/identity packages/evidence

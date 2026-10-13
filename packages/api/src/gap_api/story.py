@@ -28,7 +28,7 @@ from .host import Host
 from .http import create_app
 from .mcp_server import build_server
 
-_ID = re.compile(r"\b(prp|det|res|pst|txg|exa|swp|fnd|bnd|rls|key|chl|asr|clr|enr|rcv|evt)_[0-9a-z]{26}\b")
+_ID = re.compile(r"\b(prp|det|res|pst|txg|exa|swp|fnd|bnd|rls|key|chl|asr|clr|enr|rcv|evt|ntc)_[0-9a-z]{26}\b")
 _HASH = re.compile(r"sha256:[0-9a-f]{64}")
 
 

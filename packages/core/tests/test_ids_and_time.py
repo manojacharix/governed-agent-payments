@@ -97,5 +97,5 @@ def test_parse_rejects_malformed_ids(bad):
 def test_prefixes_match_the_model_spec():
     assert PREFIXES == {
         "whl", "spk", "rul", "evt", "rcp", "prp", "det", "res", "pst", "txg", "exa", "swp", "fnd",
-        "bnd", "rls", "key", "chl", "asr", "clr", "enr", "rcv", "pyr", "opr", "mrc", "dst", "prf",
+        "bnd", "rls", "key", "chl", "asr", "clr", "enr", "rcv", "pyr", "opr", "mrc", "dst", "prf", "ntc",
     }

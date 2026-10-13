@@ -54,6 +54,7 @@ make interfaces    # an agent over MCP proposes, the payer's device approves ove
 make demo          # the whole story: agent proposes, payer approves, merchant overcharges, reconciliation catches it,
                    # evidence bundles verified, a forged bundle caught; readable pages written to out/
 make stress        # ten extreme profiles x two seeds in parallel, every invariant checked (about 4 minutes)
+                   # (uv run python tools/stress.py --durable ... runs them on Postgres working state)
 make simulate      # synthetic run of the full flow: 40 payers, 3,000 proposals over 60 days, invariants and evidence checked (SEED=, PAYERS=, EVENTS=)
 ```
 
@@ -69,6 +70,7 @@ make simulate      # synthetic run of the full flow: 40 payers, 3,000 proposals 
 | `packages/evidence` (`gap_evidence`) | Evidence bundles with role-scoped disclosure and divergence, release log, and the open verifier |
 | `packages/identity` (`gap_identity`) | Challenges, surface assertions (ES256 or WebAuthn) with strength from the jurisdiction's scale, approval-gated enrolment, OAuth 2.1 + PKCE and signed proofs for agents, replay protection, recovery questions, recovery, compromise and suspension |
 | `packages/api` (`gap_api`) | One host service; the HTTP API (FastAPI) and the governance MCP server (MCP 2.x) over it. Agents propose, read their own proposals and spokes, request changes and hand off; only the payer's device approves |
+| `packages/state` (`gap_state`) | Working state (pending proposals, challenges, tokens, callers, recoveries) in memory or in Postgres, with units of work under per-payer locks, so several host processes can share state and any can restart |
 | `packages/sim` (`gap_sim`) | Seeded synthetic workloads through the whole stack: personal and procurement payers on the shipped configs, messy settlements, adversarial inputs; a shadow ledger and invariant checks |
 | `packages/mapping` (`gap_mapping`) | Loads jurisdiction mappings (`mappings/`) and Tier 0 configs (`tier0/`) strictly into core types |
 

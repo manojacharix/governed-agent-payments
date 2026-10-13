@@ -28,7 +28,7 @@
 | `Window` | `{kind: calendar_month | calendar_week | calendar_day | rolling, tz: IANA name, length?: Duration}`; `length` only for `rolling` | `{"kind":"calendar_month","tz":"Etc/UTC"}` |
 | `WindowId` | the window instance a time falls in: `2026-10` (month), `2026-W41` (week), `2026-10-09` (day), or the rolling start `Timestamp` | `2026-10` |
 
-**ID prefixes:** `whl` wheel, `spk` spoke, `rul` rule, `evt` wheel event, `rcp` authority receipt, `prp` proposal, `det` determination, `res` resolution, `pst` posting, `txg` posting group, `exa` execution attempt, `swp` sweep, `fnd` finding, `bnd` evidence bundle, `rls` release, `key` key log entry, `chl` challenge, `asr` assertion, `clr` caller, `enr` enrolment, `rcv` recovery, `pyr` payer, `opr` operator, `mrc` merchant ref, `dst` destination ref, `prf` profile record.
+**ID prefixes:** `whl` wheel, `spk` spoke, `rul` rule, `evt` wheel event, `rcp` authority receipt, `prp` proposal, `det` determination, `res` resolution, `pst` posting, `txg` posting group, `exa` execution attempt, `swp` sweep, `fnd` finding, `bnd` evidence bundle, `rls` release, `key` key log entry, `chl` challenge, `asr` assertion, `clr` caller, `enr` enrolment, `rcv` recovery, `pyr` payer, `opr` operator, `mrc` merchant ref, `dst` destination ref, `prf` profile record, `ntc` notice.
 
 ### 1.3 Canonical form
 
@@ -570,7 +570,7 @@ Handover (old wheel chain, last record) {
 - **The canonical model refuses U+0000 and unpaired surrogates** in every string and key, and nesting deeper than 32.
 - **The merchant is outside the trust boundary.** An unknown adapter, a cart the merchant cannot return, or a cart that breaks the money model (mixed currencies, totals beyond 2^53, unrepresentable strings) is refused at proposal with nothing recorded, and at authorisation as declined by the system. One bad cart never stops the tick for anyone else.
 - **A capped spoke has no room in a currency it has no cap for.**
-- **One host process serialises every call into the flow** under one lock. Running several processes needs proposal, challenge and token state in Postgres first.
+- **One host process serialises every call into the flow** under one lock. (Since 13 Oct, working state can live in Postgres and several processes serialise per payer; see §12.)
 - **Enrolment checks before the payer is asked:** the OAuth client exists, the key parses as P-256. Redirect URIs are https or loopback.
 
 ## 11. Profile store and data keys (`07` §8)
@@ -610,6 +610,27 @@ ledger_records (
 - **Key log anchor.** The first key-log entry is the host's key, self-signed; verifiers pin it. Signatures are checked against every key ever enrolled (retired keys' past signatures stay valid); an audit flags records signed after a key's `compromised_since` or after its revocation, using the record's own time field (`posted_at`, `occurred_at`, `evaluated_at`, `issued_at`, `released_at`, `received_at`, `at`); a record with no time field is flagged.
 - **Postings.** `signal_ref` is `<source>:<ref>` with source `merchant`, `rail`, `bank` or `reconciliation`; any other source is refused. A capture below the hold posts `capture` and `release` in one group; above it, `capture` and `overcapture`. The usage count for velocity is the number of holds placed in the window.
 - **Profile records** are encrypted with AES-256-GCM using the `profile_ref` as associated data, so ciphertext cannot be moved between records.
+
+**State database** (role `state_writer`: `SELECT`, `INSERT`, `UPDATE`, `DELETE` on one table; added 13 Oct): the working state that used to live in one process's memory, so several host processes can share it and any of them can restart.
+```
+state_items (
+  kind text, key text,        proposal | intent | recent | challenge | client | enrolment | caller | code | token | refresh | recovery | failure | suspension | notice
+  scope text,                 the payer the object belongs to: its lock scope
+  tag text, status text,      secondary filters (the wheel; the object's status)
+  data jsonb,                 the object, encoded by gap_core.codec
+  version bigint,             optimistic check
+  expires_at timestamptz, updated_at timestamptz,
+  primary key (kind, key)
+)
+```
+- **Not the record of truth.** The ledger is. State holds what is in flight (pending proposals, unanswered challenges, live tokens and nonces, recoveries in their delay, suspensions) and what the next decision needs (prior intents, the duplicate window). No personal data beyond opaque refs; codes, access tokens and refresh tokens are stored by their SHA-256 only.
+- **Units of work.** Every flow and identity operation is one transaction under the payer's advisory lock (session-level, `pg_advisory_lock`), released when the operation ends. Objects are read on first use, changed in place, and written back only if they changed, each write naming the version it read: a lost update is `StateConflict` (HTTP 409, nothing committed) rather than a silent overwrite.
+- **Why the lock, not just versions.** Cap and budget usage lives in the ledger, not in state rows, so version checks alone cannot stop two processes from each fitting a payment into the same room. Tested: without the lock, processes racing for one cap overspend it.
+- **Checkpoints.** An operation commits mid-way before an irreversible step, still holding the lock: when a payer's assertion consumes its challenge, and when an approval is resolved, just before money is held and the merchant is called. A process that dies after that point leaves the proposal `executing`: it can never be approved again, and reconciliation settles it from the ledger and the merchant.
+- **Ticks** handle each due proposal and recovery in its own unit, re-read after locking, so several schedulers can run at once and still act once.
+- **Configuration is not state.** Every process registers the same deployments; registering records a wheel or spoke version once, and refuses a recorded version whose content differs.
+- **Purge.** `PgStore.purge(now)` deletes rows past `expires_at` (challenges, codes, access tokens); run it from a scheduler.
+- **In memory** (`MemoryStore`, the default) the same code runs with plain dicts: tests, the simulator, single-process demos.
 
 **Evidence files:** bundles and raw sweep snapshots in object storage with retention lock; any personal data inside is encrypted under the payer's data key.
 

@@ -10,15 +10,16 @@ silent repeat, the instruction and its tolerance). Then: hold, execute, and a re
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
-from gap_adapters.execute import Authorisation, ExecutionRefused, Executor
+from gap_adapters.execute import Authorisation, ExecutionRefused, ExecutionResult, Executor
 from gap_adapters.interface import MerchantError
 from gap_core.canonical import CanonicalError
 from gap_core.authority import Caller, Spoke, Wheel
 from gap_core.clock import Clock
-from gap_core.codec import encode
+from gap_core.codec import decode, encode
 from gap_core.evaluate import (Determination, EvaluationInput, IntentConflict, PriorIntent, RecentProposal, Repeat, Usage,
                                can_override, evaluate)
 from gap_core.facts import Fact, FactSet
@@ -33,7 +34,8 @@ from gap_ledger.money import Account, HoldRefused, MoneyInFlight, Signal, replay
 from gap_profile.store import ProfileStore
 from gap_recon.recon import BankFeed, Reconciler
 
-from gap_identity.identity import Identity, IdentityError
+from gap_identity.identity import Identity, IdentityError, atomic
+from gap_state.store import Kind, MemoryStore
 
 
 class FlowError(RuntimeError):
@@ -113,19 +115,69 @@ class Pending:
     events: list = field(default_factory=list)
 
 
+def _dump_result(r):
+    if r is None:
+        return {"kind": "none"}
+    if isinstance(r, ExecutionResult):
+        return {"kind": "execution", **{f.name: encode(getattr(r, f.name)) for f in dataclasses.fields(r)}}
+    if isinstance(r, Invalid):
+        return {"kind": "invalid", "code": r.code, "detail": r.detail}
+    if isinstance(r, Pending):  # superseded: the proposal that replaced it
+        return {"kind": "proposal", "proposal_id": r.proposal_id}
+    if isinstance(r, str):
+        return {"kind": "proposal", "proposal_id": r}
+    raise TypeError(f"cannot store result {type(r).__name__}")
+
+
+def _load_result(d):
+    kind = d["kind"]
+    if kind == "execution":
+        return ExecutionResult(**{k: decode(v) for k, v in d.items() if k != "kind"})
+    if kind == "invalid":
+        return Invalid(d["code"], d["detail"])
+    if kind == "proposal":
+        return d["proposal_id"]  # the replacing proposal, by id
+    return None
+
+
+def dump_pending(p: "Pending") -> dict:
+    return {"proposal_id": p.proposal_id, "wheel_id": p.wheel_id,
+            "request": {f.name: encode(getattr(p.request, f.name)) for f in dataclasses.fields(p.request)},
+            "determination": encode(p.determination), "status": p.status, "received_at": encode(p.received_at),
+            "notice_until": encode(p.notice_until), "notice_delivered": p.notice_delivered, "result": _dump_result(p.result),
+            "events": [encode(e) for e in p.events]}
+
+
+def load_pending(d: dict) -> "Pending":
+    return Pending(d["proposal_id"], d["wheel_id"], ProposalRequest(**{k: decode(v) for k, v in d["request"].items()}),
+                   decode(d["determination"]), d["status"], decode(d["received_at"]), decode(d["notice_until"]), d["notice_delivered"],
+                   _load_result(d["result"]), [decode(e) for e in d["events"]])
+
+
+ACTIVE = ("awaiting_approval", "notice", "executing")
+
+
 class Flow:
+    """Working state (pending proposals, prior intents, the duplicate window) lives in a Store: in memory by default,
+    or Postgres (gap_state.PgStore) so several host processes share it and any of them can restart (19 §12)."""
+
     def __init__(self, ledger: Ledger, profile: ProfileStore, keylog: KeyLog, identity: Identity, clock: Clock, rng, *, evaluator_digest: str,
-                 max_pending_age_s: int = 3600, refund_stall_s: int = 3 * 86400) -> None:
+                 max_pending_age_s: int = 3600, refund_stall_s: int = 3 * 86400, store=None) -> None:
         self.ledger, self.profile, self.keylog, self.identity, self.clock, self.rng = ledger, profile, keylog, identity, clock, rng
         self.signer = keylog.signer
         self.evaluator_digest = evaluator_digest
         self.money = MoneyInFlight(ledger, self.signer, clock, rng)
         self.executor = Executor(ledger, self.signer, clock, rng)
         self.recon = Reconciler(ledger, self.signer, clock, rng, self.money, max_pending_age_s=max_pending_age_s, refund_stall_s=refund_stall_s)
-        self.deployments: dict[str, Deployment] = {}
-        self.proposals: dict[str, Pending] = {}
-        self.intents: dict[str, dict] = {}  # wheel_id -> {intent_id: PriorIntent}
-        self.recent: dict[str, list] = {}
+        self.deployments: dict[str, Deployment] = {}  # configuration: every process registers the same deployments
+        self.store = store or identity.store or MemoryStore()
+        payer = lambda wid: self.deployments[wid].wheel.payer_ref if wid in self.deployments else ""  # noqa: E731
+        self.proposals = self.store.table(Kind("proposal", dump_pending, load_pending, scope=lambda p: payer(p.wheel_id),
+                                               tag=lambda p: p.wheel_id, status=lambda p: p.status))
+        # wheel|intent -> {"wheel_id", "intent_id", "prior": PriorIntent}
+        self.intents = self.store.table(Kind("intent", encode, decode, scope=lambda x: payer(x["wheel_id"]), tag=lambda x: x["wheel_id"]))
+        # proposal_id -> {"wheel_id", "recent": RecentProposal}: the duplicate window
+        self.recent = self.store.table(Kind("recent", encode, decode, scope=lambda x: payer(x["wheel_id"]), tag=lambda x: x["wheel_id"]))
 
     # --- setup -----------------------------------------------------------------------------
 
@@ -136,13 +188,28 @@ class Flow:
             if ad.describe().adapter_id != key:
                 raise FlowError(f"adapter registered as {key!r} reports itself as {ad.describe().adapter_id!r}")
         self.deployments[w.wheel_id] = dep
-        self.intents.setdefault(w.wheel_id, {})
-        self.recent.setdefault(w.wheel_id, [])
+        with self.store.unit(w.payer_ref):  # idempotent: a second process (or a restart) registering the same documents adds nothing
+            self._record_versions(dep)
+
+    def _record_versions(self, dep: Deployment) -> None:
+        w = dep.wheel
+        recorded = {(r["record_type"], r.get("wheel_id") or r.get("spoke_id"), r["version"]): r["document_hash"]
+                    for r in self.ledger.records(w.wheel_id) if r["record_type"] in ("wheel_version", "spoke_version")}
         for kind, doc, rid in [("wheel", w, w.wheel_id)] + [("spoke", s, s.spoke_id) for s in dep.spokes.values()]:
+            h = hash_value(encode(doc))
+            seen = recorded.get((f"{kind}_version", rid, doc.version))
+            if seen == h:
+                continue
+            if seen is not None:
+                raise FlowError(f"{kind} {rid} version {doc.version} is already recorded with different content; bump the version")
             ref, _ = self.profile.put(w.payer_ref, kind, encode(doc))
             self.ledger.append(w.wheel_id, {"record_type": f"{kind}_version", f"{kind}_id": rid, "version": doc.version,
                                             "document_hash": hash_value(encode(doc)), "document_ref": ref,
                                             "at": format_ts(self.clock.now())}, self.signer, record_id=rid)
+
+    def _payer_of_wheel(self, wheel_id: str) -> str | None:
+        dep = self.deployments.get(wheel_id)
+        return dep.wheel.payer_ref if dep else None
 
     def _wheel(self, dep: Deployment) -> Wheel:
         """The wheel as evaluated: suspended while a surface key is compromised (07 §2, 01 §5)."""
@@ -220,6 +287,7 @@ class Flow:
 
     # --- propose ----------------------------------------------------------------------------
 
+    @atomic(lambda self, a: self._payer_of_wheel(a["wheel_id"]))
     def propose(self, wheel_id: str, req: ProposalRequest, proof: dict):
         dep = self.deployments[wheel_id]
         try:  # who is proposing, proven; a claimed name never reaches the evaluator
@@ -237,9 +305,16 @@ class Flow:
         pid = new_id("prp", clock=self.clock, rng=self.rng)
         at = self.clock.now()
         window = timedelta(seconds=dep.ctx["params"].duplicate_window_s)
-        recent = tuple(r for r in self.recent[wheel_id] if at - r.at <= window)
+        recent = []
+        for x in self.recent.where(tag=wheel_id):
+            if at - x["recent"].at <= window:
+                recent.append(x["recent"])
+            else:
+                self.recent.pop(x["recent"].proposal_id)  # outside the window: no longer needed
+        recent = tuple(sorted(recent, key=lambda r: (r.at, r.proposal_id)))
+        prior = self.intents.get(f"{wheel_id}|{req.intent_id}")
         det, inp = self._evaluate(dep, pid, new_id("det", clock=self.clock, rng=self.rng), req, body, self._host_facts(dep, req),
-                                  prior_intents=dict(self.intents[wheel_id]), recent=recent)
+                                  prior_intents={req.intent_id: prior["prior"]} if prior else {}, recent=recent)
         if isinstance(det, (Repeat, IntentConflict)):
             return det
         body_ref, body_commitment = self.profile.put(dep.wheel.payer_ref, "proposal_body", encode(body))
@@ -251,8 +326,9 @@ class Flow:
             "received_at": format_ts(at),
         }, self.signer, record_id=pid)
         self._record_determination(dep, det, inp)
-        self.intents[wheel_id][req.intent_id] = PriorIntent(det.proposal_hash, det.determination_id)
-        self.recent[wheel_id].append(RecentProposal(pid, req.intent_id, body.merchant_ref, cart_hash(body), at))
+        self.intents[f"{wheel_id}|{req.intent_id}"] = {"wheel_id": wheel_id, "intent_id": req.intent_id,
+                                                       "prior": PriorIntent(det.proposal_hash, det.determination_id)}
+        self.recent[pid] = {"wheel_id": wheel_id, "recent": RecentProposal(pid, req.intent_id, body.merchant_ref, cart_hash(body), at)}
         p = Pending(pid, wheel_id, req, det, det.outcome, at)
         if det.outcome == "allow" and det.approval_mode == "silent_with_notice":
             p.status, p.notice_until = "notice", at + timedelta(seconds=dep.notice_duration_s)
@@ -276,6 +352,7 @@ class Flow:
             return hash_value({"presented_hash": det.presented_hash, "overridden": sorted(overridden or [])})
         return det.presented_hash or det.proposal_hash
 
+    @atomic(lambda self, a: self.proposals.scope_of(a["proposal_id"]))
     def challenge(self, proposal_id: str, action: str, overridden: list[str] | None = None) -> dict:
         """What the payer's device signs: issued when the proposal is presented (07 §3)."""
         p = self.proposals[proposal_id]
@@ -321,6 +398,7 @@ class Flow:
             raise FlowError(f"proposal {proposal_id} is not {' or '.join(states)}")
         return p
 
+    @atomic(lambda self, a: self.proposals.scope_of(a["proposal_id"]))
     def approve(self, proposal_id: str, assertion: dict):
         p = self._get(proposal_id, "awaiting_approval")
         if p.determination.outcome != "allow":
@@ -328,6 +406,7 @@ class Flow:
         info = self._verify(p, assertion, "authorise")
         return self._authorise(p, "approved", self._record_assertion(p, info, "authorise"), no_auth_rail_ok=info["no_auth_rail_ok"])
 
+    @atomic(lambda self, a: self.proposals.scope_of(a["proposal_id"]))
     def override(self, proposal_id: str, clause_ids: list[str], assertion: dict):
         p = self._get(proposal_id, "awaiting_approval")
         if not can_override(p.determination, clause_ids):
@@ -336,6 +415,7 @@ class Flow:
         return self._authorise(p, "approved_with_override", self._record_assertion(p, info, "override"), set(clause_ids),
                                no_auth_rail_ok=info["no_auth_rail_ok"])
 
+    @atomic(lambda self, a: self.proposals.scope_of(a["proposal_id"]))
     def decline(self, proposal_id: str, assertion: dict) -> Pending:
         p = self._get(proposal_id, "awaiting_approval", "notice")
         info = self._verify(p, assertion, "decline")
@@ -343,6 +423,7 @@ class Flow:
         p.status = "declined"
         return p
 
+    @atomic(lambda self, a: self.proposals.scope_of(a["proposal_id"]))
     def notice_delivered(self, proposal_id: str) -> None:
         """The host received the device's delivery receipt for a silent repeat's notice."""
         self._get(proposal_id, "notice").notice_delivered = True
@@ -350,19 +431,26 @@ class Flow:
     # --- time passes ------------------------------------------------------------------------------
 
     def tick(self, *, sweep: bool = False) -> list:
+        """Expiries, silent repeats whose notice has run, due recoveries and sweeps. Each proposal is handled in its own
+        unit under its payer's lock and re-read after locking, so two processes ticking at once never act twice."""
         now, out = self.clock.now(), []
-        for p in list(self.proposals.values()):
-            dep = self.deployments[p.wheel_id]
-            if p.status == "awaiting_approval" and now - p.received_at > timedelta(seconds=dep.proposal_ttl_s):
-                self._resolve(p, p.determination.determination_id, "expired", "system")
-                p.status = "expired"
-                out.append(p)
-            elif p.status == "notice" and now >= p.notice_until:
-                out.append(self._authorise(p, "proceeded_on_silence", None))
+        for seen in self.proposals.where(status=("awaiting_approval", "notice")):
+            if seen.wheel_id not in self.deployments:
+                continue
+            with self.store.unit(self._payer_of_wheel(seen.wheel_id)):
+                p = self.proposals.get(seen.proposal_id)
+                dep = self.deployments[p.wheel_id]
+                if p.status == "awaiting_approval" and now - p.received_at > timedelta(seconds=dep.proposal_ttl_s):
+                    self._resolve(p, p.determination.determination_id, "expired", "system")
+                    p.status = "expired"
+                    out.append(p)
+                elif p.status == "notice" and now >= p.notice_until:
+                    out.append(self._authorise(p, "proceeded_on_silence", None))
         self.identity.tick()  # delayed recoveries that are due
         if sweep:
             for wid, dep in self.deployments.items():
-                self.recon.sweep(wid, dep.adapters, dep.bank, trigger="scheduled")
+                with self.store.unit(dep.wheel.payer_ref):
+                    self.recon.sweep(wid, dep.adapters, dep.bank, trigger="scheduled")
         return out
 
     # --- stage 2, hold, execute, reconcile ------------------------------------------------------------
@@ -396,6 +484,11 @@ class Flow:
             return p
         by = "system" if kind == "proceeded_on_silence" else "payer"
         self._resolve(p, det2.determination_id, kind, by, assertion_id, overridden or None)
+        # The point of no return: commit before money is held or a merchant is called. If the process dies from here on,
+        # the proposal stays "executing" (never back to awaiting the payer, so it cannot be approved twice) and
+        # reconciliation settles the money from the ledger and the merchant (05).
+        p.status = "executing"
+        self.store.checkpoint()
         if dep.sweep_before_hold:
             self.recon.sweep(p.wheel_id, dep.adapters, dep.bank, trigger="before_hold")
         amount = body.total

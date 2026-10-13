@@ -109,7 +109,7 @@ class Report:
 
 
 class FlowSimulation:
-    def __init__(self, ledger_conn, profile_conn, seed: int, payers: int, profile: dict | None = None) -> None:
+    def __init__(self, ledger_conn, profile_conn, seed: int, payers: int, profile: dict | None = None, store=None) -> None:
         self.rng, self.seed = random.Random(seed), seed
         self.k = {**DEFAULT, **(profile or {})}
         self.clock = FixedClock(self.k["start"])
@@ -120,9 +120,9 @@ class FlowSimulation:
         self.digest = evaluator_digest()
         india = load_mapping(ROOT / "mappings/in/v0.1.0.yaml")
         id_params = {**load_tier0(ROOT / "tier0/examples/personal_in.yaml", india).raw, "identity.surface.min_assurance": "software"}
-        self.identity = Identity(self.ledger, self.keylog, self.clock, scale=india.auth_levels, params=id_params, host_ref="sim", secrets_conn=profile_conn)
+        self.identity = Identity(self.ledger, self.keylog, self.clock, scale=india.auth_levels, params=id_params, host_ref="sim", secrets_conn=profile_conn, store=store)
         self.flow = Flow(self.ledger, ProfileStore(profile_conn, LocalKek.generate(), self.clock), self.keylog, self.identity, self.clock,
-                         random.Random(seed + 1), evaluator_digest=self.digest, max_pending_age_s=6 * 3600, refund_stall_s=5 * 86400)
+                         random.Random(seed + 1), evaluator_digest=self.digest, max_pending_age_s=6 * 3600, refund_stall_s=5 * 86400, store=store)
         self.intruder = KeyAgent("key_intruder", self.clock)
         self.intruder.caller_id = "clr_never_enrolled"
         self.blocked: list = []      # [payer_ref, start_seq, end_seq or None, why]: suspended or recovering
@@ -493,5 +493,5 @@ class FlowSimulation:
 
 
 def run(ledger_conn, profile_conn, *, seed: int, payers: int, events: int, minutes_per_event: int = 15, bundles: int = 25,
-        profile: dict | None = None) -> Report:
-    return FlowSimulation(ledger_conn, profile_conn, seed, payers, profile).run(events, minutes_per_event, bundles)
+        profile: dict | None = None, store=None) -> Report:
+    return FlowSimulation(ledger_conn, profile_conn, seed, payers, profile, store).run(events, minutes_per_event, bundles)

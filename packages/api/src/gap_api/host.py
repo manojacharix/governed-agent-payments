@@ -6,9 +6,9 @@ challenges. Every caller-facing read follows verify-don't-see (invariant 22): an
 proposed and the spokes bound to it, never another spoke's rules, caps or spending.
 
 Everything an agent sends is checked here before it reaches the flow: exact types (no coercion), bounded
-lengths, no control characters, a bounded number of facts with canonical values. The flow and its single
-database connection are not thread-safe, and HTTP servers run requests on a thread pool, so every call into
-the flow holds one lock: requests are serialised per host process (19 §10.6).
+lengths, no control characters, a bounded number of facts with canonical values. The flow and its database
+connections are not thread-safe, and HTTP servers run requests on a thread pool, so every call into the flow
+holds one lock per process. Across processes, the state store's per-payer locks serialise (19 §12).
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from gap_core.timefmt import format_ts
 from gap_flow.flow import Flow, FlowError, Invalid, Pending, ProposalRequest, Rejected
 from gap_identity.identity import IdentityError
 from gap_ledger.money import replay
+from gap_state.store import StateConflict
 
 REQUEST_FIELDS = {"spoke_id", "intent_id", "merchant_ref", "adapter_id", "cart_ref", "destination_ref", "agent_confidence", "rail_id", "facts"}
 REQUIRED_TEXT = ("spoke_id", "intent_id", "merchant_ref", "adapter_id", "cart_ref", "destination_ref")
@@ -102,10 +103,15 @@ def parse_request(payload) -> ProposalRequest:
 
 
 def serialised(fn):
+    """One request at a time per process (the connections are shared); across processes the store's per-payer locks
+    serialise. A lost update caught by the store is a 409 the client can retry: nothing was committed."""
     @functools.wraps(fn)
     def wrapper(self, *a, **kw):
         with self.lock:
-            return fn(self, *a, **kw)
+            try:
+                return fn(self, *a, **kw)
+            except StateConflict as e:
+                raise HostError(409, "state_conflict", str(e)) from None
     return wrapper
 
 
@@ -187,7 +193,7 @@ class Host:
 
     @serialised
     def list(self, wheel_id: str, caller: Caller) -> list[dict]:
-        return [self.view(p) for p in self.flow.proposals.values() if p.wheel_id == wheel_id and p.request.caller.caller_id == caller.caller_id]
+        return [self.view(p) for p in self.flow.proposals.where(tag=wheel_id) if p.request.caller.caller_id == caller.caller_id]
 
     @serialised
     def spokes(self, wheel_id: str, caller: Caller, at: datetime | None = None) -> list[dict]:
@@ -283,7 +289,7 @@ class Host:
 
     @serialised
     def enrolment_challenge(self, enrolment_id: str) -> dict:
-        e = self.identity.enrolments.get(enrolment_id)
+        e = self.identity.enrolment(enrolment_id) if isinstance(enrolment_id, str) else None
         if e is None:
             raise HostError(404, "unknown_enrolment")
         ch = self.identity.challenge(payer_ref=e["payer_ref"], action="enrol", subject_hash=e["subject_hash"])

@@ -20,6 +20,7 @@ members = [
     "gap-profile",
     "gap-recon",
     "gap-sim",
+    "gap-state",
     "governed-agent-payments",
 ]
 
@@ -396,6 +397,7 @@ dependencies = [
     { name = "gap-ledger" },
     { name = "gap-profile" },
     { name = "gap-recon" },
+    { name = "gap-state" },
 ]
 
 [package.metadata]
@@ -407,6 +409,7 @@ requires-dist = [
     { name = "gap-ledger", editable = "packages/ledger" },
     { name = "gap-profile", editable = "packages/profile" },
     { name = "gap-recon", editable = "packages/recon" },
+    { name = "gap-state", editable = "packages/state" },
 ]
 
 [[package]]
@@ -419,6 +422,7 @@ dependencies = [
     { name = "gap-core" },
     { name = "gap-keys" },
     { name = "gap-ledger" },
+    { name = "gap-state" },
     { name = "psycopg", extra = ["binary"] },
 ]
 
@@ -429,6 +433,7 @@ requires-dist = [
     { name = "gap-core", editable = "packages/core" },
     { name = "gap-keys", editable = "packages/keys" },
     { name = "gap-ledger", editable = "packages/ledger" },
+    { name = "gap-state", editable = "packages/state" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
 ]
 
@@ -543,6 +548,21 @@ requires-dist = [
 ]
 
 [[package]]
+name = "gap-state"
+version = "0.1.0"
+source = { editable = "packages/state" }
+dependencies = [
+    { name = "gap-core" },
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gap-core", editable = "packages/core" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
+]
+
+[[package]]
 name = "governed-agent-payments"
 version = "0.0.0"
 source = { virtual = "." }
@@ -561,6 +581,7 @@ dev = [
     { name = "gap-profile" },
     { name = "gap-recon" },
     { name = "gap-sim" },
+    { name = "gap-state" },
     { name = "hypothesis" },
     { name = "pytest" },
 ]
@@ -581,6 +602,7 @@ dev = [
     { name = "gap-profile", editable = "packages/profile" },
     { name = "gap-recon", editable = "packages/recon" },
     { name = "gap-sim", editable = "packages/sim" },
+    { name = "gap-state", editable = "packages/state" },
     { name = "hypothesis", specifier = ">=6" },
     { name = "pytest", specifier = ">=8" },
 ]

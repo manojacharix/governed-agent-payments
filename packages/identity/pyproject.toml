@@ -3,9 +3,10 @@ name = "gap-identity"
 version = "0.1.0"
 description = "Identity (07): challenges, surface assertions, callers with OAuth/PKCE and signed proofs, recovery, compromise"
 requires-python = ">=3.12"
-dependencies = ["gap-core", "gap-ledger", "gap-keys", "argon2-cffi>=23", "cryptography>=43", "psycopg[binary]>=3.2"]
+dependencies = ["gap-state", "gap-core", "gap-ledger", "gap-keys", "argon2-cffi>=23", "cryptography>=43", "psycopg[binary]>=3.2"]
 
 [tool.uv.sources]
+gap-state = { workspace = true }
 gap-core = { workspace = true }
 gap-ledger = { workspace = true }
 gap-keys = { workspace = true }
