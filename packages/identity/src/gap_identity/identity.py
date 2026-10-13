@@ -363,6 +363,7 @@ class Identity:
     @atomic(lambda self, a: self.codes.scope_of(sha(a["code"])) if isinstance(a["code"], str) else None)
     def token(self, code: str, code_verifier: str, client_id: str) -> dict:
         c = self.codes.pop(sha(code), None)  # single use
+        self.store.checkpoint()  # spent even if what follows fails: a rollback must not hand the code back
         if c is None or c["client_id"] != client_id or self._now() > c["expires"]:
             raise IdentityError("invalid_grant")
         expected = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b"=").decode()
@@ -380,6 +381,7 @@ class Identity:
     @atomic(lambda self, a: self.refresh.scope_of(sha(a["refresh"])) if isinstance(a["refresh"], str) else None)
     def refresh_token(self, refresh: str, client_id: str) -> dict:
         r = self.refresh.pop(sha(refresh), None)  # rotation: each refresh token works once
+        self.store.checkpoint()  # spent even if what follows fails
         if r is None or r["client_id"] != client_id or self.callers[r["caller_id"]].status != "active":
             raise IdentityError("invalid_grant")
         return self._issue(r["caller_id"], client_id)
@@ -486,6 +488,7 @@ class Identity:
             self.failures[payer_ref] = {"payer_ref": payer_ref, "at": recent}
             if len(recent) >= MAX_ANSWER_FAILURES:
                 self._notify(payer_ref, "recovery locked after five wrong answers")
+            self.store.checkpoint()  # the caller raises next; the failure must count anyway (brute-force lockout)
         return ok
 
     # --- recovery ---------------------------------------------------------------------------------

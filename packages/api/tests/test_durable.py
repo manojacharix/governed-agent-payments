@@ -210,3 +210,54 @@ def test_a_crash_at_the_point_of_no_return_never_allows_a_second_approval(c, mon
     assert survivor.post(f"/v1/proposals/{pid}/approve", json={"assertion": w.device.respond(ch2)}).status_code == 403
     c.hosts[-1].tick(sweep=True)
     assert w.merchant.place_calls == 0  # nobody re-ran it; reconciliation owns it from here
+
+
+# --- security review (2026-10-13): a rolled-back unit must not undo what has to stick ----------------------
+
+def _session_code(idn, w, verifier="v" * 50):
+    import base64, hashlib
+    client = idn.register_client("x", "https://x.example/cb")
+    e = idn.request_caller("pyr_1", client_id=client)
+    pkce = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    code = idn.approve_caller(e["enrolment_id"], w.device.respond(idn.challenge(payer_ref="pyr_1", action="enrol", subject_hash=e["subject_hash"])),
+                              code_challenge=pkce)["code"]
+    return client, code
+
+
+def test_wrong_recovery_answers_count_even_though_the_attempt_fails(c):
+    from gap_identity.devices import Device
+    from gap_identity.identity import IdentityError
+    w, idn = c.w, c.hosts[0].identity
+    from gap_core.hashing import hash_value
+    idn.set_recovery_questions("pyr_1", ["alpha one", "beta two", "gamma three"],
+                               w.device.respond(idn.challenge(payer_ref="pyr_1", action="wheel_event", subject_hash=hash_value({"recovery_questions": "pyr_1"}))))
+    new = Device("key_new")
+    for _ in range(5):
+        with pytest.raises(IdentityError, match="wrong_answers"):
+            idn.start_recovery("pyr_1", new_key_id=new.key_id, new_jwk=new.public_jwk, new_key_user_verification="inherence",
+                               answers=["x x x", "y y y", "z z z"], external_verified=True)
+    other = c.process(seed=2).identity  # the count is shared and durable
+    with pytest.raises(IdentityError, match="locked"):
+        other.start_recovery("pyr_1", new_key_id=new.key_id, new_jwk=new.public_jwk, new_key_user_verification="inherence",
+                             answers=["alpha one", "beta two", "gamma three"], external_verified=True)
+
+
+def test_a_code_is_spent_by_a_failed_redemption(c):
+    from gap_identity.identity import IdentityError
+    w, idn = c.w, c.hosts[0].identity
+    client, code = _session_code(idn, w)
+    with pytest.raises(IdentityError):
+        idn.token(code, "wrong" * 10, client)  # wrong PKCE verifier
+    with pytest.raises(IdentityError):
+        idn.token(code, "v" * 50, client)  # the right one no longer helps: the code was single use
+
+
+def test_a_refresh_token_is_spent_by_a_failed_refresh(c):
+    from gap_identity.identity import IdentityError
+    w, idn = c.w, c.hosts[0].identity
+    client, code = _session_code(idn, w)
+    tok = idn.token(code, "v" * 50, client)
+    with pytest.raises(IdentityError):
+        idn.refresh_token(tok["refresh_token"], "cli_someone_else")
+    with pytest.raises(IdentityError):
+        idn.refresh_token(tok["refresh_token"], client)
