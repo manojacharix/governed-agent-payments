@@ -630,6 +630,7 @@ state_items (
 - **Recovering a payment stuck `executing`** (added 13 Oct after a review found the hold could be stranded: the executor records its first attempt only after the merchant answers, so reconciliation could not see a hold whose process died before that). Once `executing_grace_s` (default 600) has passed, the tick takes the payer's lock and settles it, never by placing an order:
   - an attempt is already recorded: keep that answer (only the status update was lost);
   - no hold was placed: the payment failed, nothing to release;
+  - money is held but the payment's adapter or rail is not configured on this process: leave it `executing`, still counted against the cap, and retry every tick until it is (fail closed; a security review found an earlier version marked it failed and stranded the hold);
   - the merchant's history shows the order (by idempotency key, or cart for merchants without keys): record it as `RECOVERED+FOUND_IN_HISTORY`, and reconciliation captures it against the bank as usual;
   - the merchant's complete history proves it absent: record `RECOVERED+NOT_FOUND`, release the hold;
   - absence cannot be proven: record `RECOVERED+NOT_PROVEN` with outcome `unknown` and keep the hold; reconciliation chases it and opens a finding if it stays unresolved, so held money is never unexplained.

@@ -389,3 +389,24 @@ def test_two_schedulers_recover_a_stuck_payment_once(c, monkeypatch):
     assert b.flow.proposals[pid].status == "failed" and _held(w) == 0
     assert len([a for a in w.flow.ledger.records("whl_1", "execution_attempt")]) == 1
     assert len([r for r in w.flow.ledger.records("whl_1", "posting") if r["kind"] == "release"]) == 2  # spoke and wheel, once each
+
+
+def test_recovery_with_the_adapter_or_rail_missing_waits_instead_of_failing_silently(c, monkeypatch):
+    """Security review: with money held but the adapter or rail gone from configuration, recovery marked the payment
+    failed without releasing or asking anyone, stranding the hold under a terminal status. It must wait instead."""
+    w = c.w
+    pid = _crash_approving(c, monkeypatch, c.hosts[0].flow.executor, "execute")
+    survivor = c.process(seed=2)
+    dep = survivor.flow.deployments["whl_1"]
+    adapters, rails = dict(dep.adapters), dict(dep.ctx["rails"])
+    w.clock.advance(timedelta(minutes=30))
+    dep.adapters.clear()
+    survivor.tick()
+    assert survivor.flow.proposals[pid].status == "executing" and _held(w) > 0  # untouched, retried next tick
+    dep.adapters.update(adapters)
+    dep.ctx["rails"].clear()
+    survivor.tick()
+    assert survivor.flow.proposals[pid].status == "executing" and _held(w) > 0
+    dep.ctx["rails"].update(rails)
+    survivor.tick()  # configuration is back: settled properly
+    assert survivor.flow.proposals[pid].status == "failed" and _held(w) == 0

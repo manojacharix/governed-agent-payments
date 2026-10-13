@@ -473,10 +473,15 @@ class Flow:
             p.status = "failed" if outcome == "failure" else "executed"
             p.result = ExecutionResult(outcome, attempts[-1].get("merchant_order_ref"), None, attempts, needs_reconciliation=True)
             return p
+        if not held:  # died before the hold: nothing reserved, no order possible
+            p.status = "failed"
+            return p
         rail = dep.ctx["rails"].get(det2.rail_id)
         adapter = dep.adapters.get(p.request.adapter_id)
-        if not held or rail is None or adapter is None:  # died before the hold: nothing reserved, no order possible
-            p.status = "failed"
+        if rail is None or adapter is None:
+            # Money is held and only the merchant can say what happened, but its adapter or rail is not configured on
+            # this process. Fail closed: leave it "executing" (still counted against the cap, never released on a guess)
+            # and retry on every tick until the configuration is back.
             return p
         since = (p.executing_since or p.received_at) - timedelta(minutes=1)
         res, absent = self.executor.recover(p.wheel_id, det2, p.request.cart_ref, p.request.destination_ref, rail, adapter, since)
