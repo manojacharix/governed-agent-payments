@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -164,7 +164,7 @@ class FlowSimulation:
         device, spare = Device(f"key_dev_{i}"), Device(f"key_spare_{i}")
         idn.enrol_first_surface(pyr, device.key_id, device.public_jwk)
         idn.enrol_key(pyr, spare.key_id, spare.public_jwk, device.respond(idn.challenge(payer_ref=pyr, action="enrol",
-                      subject_hash=idn.key_subject(spare.key_id, spare.public_jwk, "surface"))))
+                      subject_hash=idn.key_subject(spare.key_id, spare.public_jwk, "surface"))), user_verification=spare.user_verification)
         from gap_core.hashing import hash_value as _h
         idn.set_recovery_questions(pyr, ["first answer", "second answer", "third answer"],
                                    device.respond(idn.challenge(payer_ref=pyr, action="wheel_event", subject_hash=_h({"recovery_questions": pyr}))))
@@ -190,6 +190,9 @@ class FlowSimulation:
             wheel = Wheel(wid, pyr, "in", budgets=(Limit(inr(cs(r.randint(20, 60) * 10_000_000)), self.month),))
             leaves = [f"{wid}_agent"]
         m = FakeMerchant(r.choice("ab"), self.clock)
+        if kind == "personal":  # the standing instruction names the adapter it orders through
+            rep = spokes[f"{wid}_repeat"]
+            spokes[f"{wid}_repeat"] = replace(rep, instruction=replace(rep.instruction, adapter_id=m.describe().adapter_id))
         bank = BankFeed()
         self.flow.register(Deployment(wheel, spokes, self.ctx[kind], {m.describe().adapter_id: m}, bank, notice_duration_s=600, proposal_ttl_s=1800))
         return Payer(kind, wid, pyr, leaves, agents, m, device, spare, bank)
@@ -204,13 +207,14 @@ class FlowSimulation:
         cart = f"{p.wheel_id}-cart-{n}"
         if spoke_id.endswith("_repeat"):
             drift = r.randint(-15, 15)
-            m.add_cart(cart, (CartLine("item_milk", 2, inr(6000 + 60 * drift)), CartLine("item_bread", 1, inr(4500))), (Fee("delivery", inr(3000)),))
             merchant, category, intent = "mrc_grocer", "std:mcc:5411", f"si:{spoke_id}:{n}"
+            m.add_cart(cart, (CartLine("item_milk", 2, inr(6000 + 60 * drift)), CartLine("item_bread", 1, inr(4500))), (Fee("delivery", inr(3000)),),
+                       merchant_ref=merchant)
         else:
             merchant, category = r.choice(MERCHANTS)
             scale = (50 if p.kind == "b2b" else 1) * self.k["price_scale"]
             m.add_cart(cart, tuple(CartLine(f"item_{r.randint(1, 60)}", r.randint(1, 3), inr(r.randint(20, 1500) * 100 * scale)) for _ in range(r.randint(1, 4))),
-                       (Fee("delivery", inr(r.choice([0, 2000, 4000]))),))
+                       (Fee("delivery", inr(r.choice([0, 2000, 4000]))),), merchant_ref=merchant)  # one marketplace adapter, many merchants
             intent = f"intent-{n}"
             if p.kind == "personal" and merchant in BLOCKED_FOR_PERSONAL:
                 reasons.add("blocked_category")

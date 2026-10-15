@@ -90,6 +90,9 @@ class Simulation:
         self.payers = [self._payer(i) for i in range(payers)]
         for p in self.payers:  # each payer shops at a merchant of shape a or b
             p.merchant = FakeMerchant(self.rng.choice("ab"), self.clock)
+            for sid, sp in p.spokes.items():  # a standing instruction names the adapter it orders through
+                if sp.instruction is not None:
+                    p.spokes[sid] = replace(sp, instruction=replace(sp.instruction, adapter_id=p.merchant.describe().adapter_id))
         self.executions: dict = {}   # det_id -> (merchant, cart_ref, attempts)
         self.shadow: dict = {}       # (owner, window_id) -> [held, spent]
         self.limits: dict = {}       # (owner, window_id) -> limit amount

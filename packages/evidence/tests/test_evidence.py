@@ -112,3 +112,47 @@ def test_divergence_primary_and_contributing(w):
 
 def test_no_divergence_is_never_combined():
     assert classify([], None) == {"primary": "no_divergence", "contributing": [], "step_refs": []}
+
+
+# --- payer consent rests on the device's signature, not the host's word (audit 2026-10-14) -----------------------
+
+def test_the_payer_signature_is_in_the_bundle_and_verifies(w):
+    p = paid(w)
+    b = builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1")
+    asr = [r for r in b["records"] if r["record_type"] == "surface_assertion"]
+    assert asr and all(a["device_proof"]["format"] == "raw_es256" and a["challenge"]["subject_hash"] == a["subject_hash"] for a in asr)
+    assert verify_bundle(b, w.host.public_jwk, evaluator=evaluator_digest())["payer_signatures"] == "ok"
+
+
+def test_a_host_cannot_record_an_approval_the_payer_never_signed(w, monkeypatch):
+    """A dishonest host signs every record properly but invents the payer's approval: the verifier catches it."""
+    from gap_keys.local import LocalSigner
+
+    real = w.flow.identity.verify_assertion
+    forger = LocalSigner.generate("key_not_the_phone")
+
+    def forged(assertion, **kw):
+        info = real(assertion, **kw)
+        info["device_proof"] = {"format": "raw_es256", "value": forger.sign(b"anything")}
+        return info
+
+    monkeypatch.setattr(w.flow.identity, "verify_assertion", forged)
+    p = paid(w)
+    b = builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1")
+    r = verify_bundle(b, w.host.public_jwk, evaluator=evaluator_digest())
+    assert r["signatures"] == "ok" and r["chain"] == "ok"  # every host signature is genuine
+    assert r["payer_signatures"] == "failed" and not r["ok"]
+
+
+def test_an_approval_recorded_without_the_device_proof_does_not_verify(w, monkeypatch):
+    real = w.flow.identity.verify_assertion
+
+    def stripped(assertion, **kw):
+        info = real(assertion, **kw)
+        info.pop("device_proof")
+        return info
+
+    monkeypatch.setattr(w.flow.identity, "verify_assertion", stripped)
+    p = paid(w)
+    r = verify_bundle(builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1"), w.host.public_jwk, evaluator=evaluator_digest())
+    assert r["payer_signatures"] == "failed" and not r["ok"]

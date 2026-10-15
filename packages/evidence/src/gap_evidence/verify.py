@@ -14,6 +14,7 @@ from gap_core.chain import ChainError, record_hash, unsigned_bytes, verify_chain
 from gap_core.codec import CodecError, decode
 from gap_core.evaluate import evaluate
 from gap_core.hashing import hash_value
+from gap_core.device_proof import ProofError, verify_device_proof
 from gap_core.signatures import SignatureError, verify
 from gap_core.timefmt import parse_ts
 
@@ -40,7 +41,8 @@ def _time(rec: dict):
 
 def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str) -> dict:
     report = {"bundle_signature": "ok", "key_log": "ok", "signatures": "ok", "chain": "ok", "keys": "ok",
-              "replay": "not_disclosed", "presented_hash": "not_disclosed", "attestations": [], "problems": []}
+              "replay": "not_disclosed", "presented_hash": "not_disclosed", "payer_signatures": "not_disclosed", "attestations": [],
+              "problems": []}
     bad = report["problems"].append
 
     sig = bundle.get("signature", {})
@@ -92,6 +94,22 @@ def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str) -> dic
                 report["keys"] = "assertion_key_unknown"
             elif sk["status"] == "compromised" and t >= parse_ts(sk["since"]):
                 report["keys"] = "signed_after_compromise"
+
+    # The payer's consent, checked from the device's own signature rather than the host's record of it.
+    for a in (r for r in bundle.get("records", []) if r.get("record_type") == "surface_assertion"):
+        report["payer_signatures"] = "ok" if report["payer_signatures"] == "not_disclosed" else report["payer_signatures"]
+        ch, proof, sk, rp = a.get("challenge"), a.get("device_proof"), states.get(a.get("surface_key_id")), a.get("relying_party") or {}
+        try:
+            if not isinstance(ch, dict) or not isinstance(proof, dict):
+                raise ProofError("the device's proof was not kept")
+            if ch.get("subject_hash") != a.get("subject_hash") or ch.get("action") != a.get("action"):
+                raise ProofError("the signed challenge is for a different action or subject")
+            if sk is None:
+                raise ProofError("unknown surface key")
+            verify_device_proof(sk["jwk"], ch, proof, rp_id=rp.get("rp_id"), origin=rp.get("origin"))
+        except ProofError as e:
+            report["payer_signatures"] = "failed"
+            bad(f"payer assertion {a.get('assertion_id')}: {e}")
 
     dets = {r["determination_id"]: r for r in bundle.get("records", []) if r.get("record_type") == "determination"}
     inputs = bundle.get("inputs", {})

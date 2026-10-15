@@ -41,6 +41,13 @@ class Window:
         y, w, _ = local.isocalendar()
         return f"{y:04d}-W{w:02d}"
 
+    def contains(self, t: datetime, at: datetime) -> bool:
+        """Whether something that happened at `t` counts in the window instance `at` falls in. A calendar window
+        compares instances; a rolling window is the `length_s` seconds up to and including `at`."""
+        if self.kind == "rolling":
+            return at - timedelta(seconds=self.length_s) < t <= at
+        return self.window_id(t) == self.window_id(at)
+
 
 @dataclass(frozen=True)
 class Limit:

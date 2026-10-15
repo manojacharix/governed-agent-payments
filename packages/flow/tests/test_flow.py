@@ -175,7 +175,7 @@ def test_a_compromised_device_suspends_spending_until_another_device_resumes(w):
     tablet = Device("key_tablet")
     i = w.flow.identity
     ch = i.challenge(payer_ref="pyr_1", action="enrol", subject_hash=i.key_subject(tablet.key_id, tablet.public_jwk, "surface"))
-    i.enrol_key("pyr_1", tablet.key_id, tablet.public_jwk, w.device.respond(ch))
+    i.enrol_key("pyr_1", tablet.key_id, tablet.public_jwk, w.device.respond(ch), user_verification="inherence")
     i.report_compromise(w.device.key_id, w.clock.now())
     w.merchant.add_cart("cart-1", LINES)
     p = w.propose(w.request())
