@@ -151,61 +151,83 @@ def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str, rp_id:
     for d in dets_by_id.values():
         if d.get("stage") == "proposal":
             first_by_proposal.setdefault(d.get("proposal_id"), []).append(d)
-    used_assertions, used_challenges = set(), set()
+    used_assertions, used_challenges, used_dets = set(), set(), set()
     bound_all = True
+    authorised = set()  # determinations a resolution that passed every check authorised: only these may move money
     for res in (r for r in records if r.get("record_type") == "resolution"):
         state, aid, rid, pid = res.get("state"), res.get("assertion_id"), res.get("resolution_id"), res.get("proposal_id")
-        if state in PAYER_STATES or res.get("by") == "payer":
-            if not aid:
-                payer_bad(f"resolution {rid}: '{state}' by the payer names no assertion")
-                continue
-            a = assertions.get(aid)
-            if a is None:
-                if must_disclose:
-                    payer_bad(f"resolution {rid}: assertion {aid} is not disclosed")
-                continue
-            cid = (a.get("challenge") or {}).get("challenge_id")
-            if aid in used_assertions or (cid is not None and cid in used_challenges):
-                payer_bad(f"resolution {rid}: assertion {aid} already backs another resolution")
-            used_assertions.add(aid)
-            used_challenges.add(cid)
-            if a.get("proposal_id") is None or a.get("proposal_id") != pid:
-                payer_bad(f"resolution {rid}: assertion {aid} is not for proposal {pid}")
-            want_action = {"approved": "authorise", "approved_with_override": "override", "declined": "decline"}.get(state)
-            if want_action is None or a.get("action") != want_action:
-                payer_bad(f"resolution {rid}: '{state}' needs a matching assertion, not '{a.get('action')}'")
+        if not (state in PAYER_STATES or res.get("by") == "payer" or state == "proceeded_on_silence"):
+            continue
+        problems = []
+        if pid != bundle.get("proposal_id"):
+            problems.append(f"is for proposal {pid}, not {bundle.get('proposal_id')}")
+        # the determination this resolution executes: of this proposal, at the authorisation stage, used once
+        det_id = res.get("determination_id")
+        det = dets_by_id.get(det_id)
+        if det_id in used_dets:
+            problems.append(f"determination {det_id} is already resolved by another resolution")
+        used_dets.add(det_id)
+        if det is None:
+            if must_disclose:
+                problems.append(f"the determination it executes ({det_id}) is not disclosed")
+        elif det.get("proposal_id") != pid or det.get("stage") != ("proposal" if state == "declined" else "authorisation"):
+            problems.append(f"determination {det_id} is not the decision this resolution acts on")
+        if state == "proceeded_on_silence":
+            if det is not None and (det.get("approval_mode") != "silent_with_notice" or det.get("outcome") != "allow"):
+                problems.append("proceeded on silence where a tap was required")
+        else:
+            a = assertions.get(aid) if aid else None
             first = first_by_proposal.get(pid, [])
-            if not first:
-                bound_all = False
-                if must_disclose:
-                    payer_bad(f"resolution {rid}: the decision the payer was shown is not disclosed")
-                continue
             overridden = res.get("overridden_clauses", []) if state == "approved_with_override" else None
-            subjects = {payer_subject(pid, d.get("presented_hash") or d.get("proposal_hash"), overridden) for d in first}
-            if a.get("subject_hash") not in subjects:
-                bound_all = False
-                payer_bad(f"resolution {rid}: the payer did not sign this proposal as shown"
-                          + (" with these clauses overridden" if overridden is not None else ""))
-        elif state == "proceeded_on_silence":
-            det = dets_by_id.get(res.get("determination_id"))
-            if det is None:
+            if not aid:
+                problems.append(f"'{state}' by the payer names no assertion")
+            elif a is None:
                 if must_disclose:
-                    payer_bad(f"resolution {rid}: the decision that allowed silence is not disclosed")
-            elif det.get("approval_mode") != "silent_with_notice" or det.get("proposal_id") != pid:
-                payer_bad(f"resolution {rid}: proceeded on silence where a tap was required")
+                    problems.append(f"assertion {aid} is not disclosed")
+            else:
+                cid = (a.get("challenge") or {}).get("challenge_id")
+                if aid in used_assertions or (cid is not None and cid in used_challenges):
+                    problems.append(f"assertion {aid} already backs another resolution")
+                used_assertions.add(aid)
+                used_challenges.add(cid)
+                if a.get("proposal_id") is None or a.get("proposal_id") != pid:
+                    problems.append(f"assertion {aid} is not for proposal {pid}")
+                want_action = {"approved": "authorise", "approved_with_override": "override", "declined": "decline"}.get(state)
+                if want_action is None or a.get("action") != want_action:
+                    problems.append(f"'{state}' needs a matching assertion, not '{a.get('action')}'")
+                if not first:
+                    bound_all = False
+                    if must_disclose:
+                        problems.append("the decision the payer was shown is not disclosed")
+                elif a.get("subject_hash") not in {payer_subject(pid, d.get("presented_hash") or d.get("proposal_hash"), overridden) for d in first}:
+                    bound_all = False
+                    problems.append("the payer did not sign this proposal as shown" + (" with these clauses overridden" if overridden is not None else ""))
+            if det is not None and state in PAYER_STATES:
+                # what executes must be what the payer signed, and the decision must permit it
+                if first and det.get("presented_hash") not in {d.get("presented_hash") for d in first}:
+                    problems.append(f"determination {det_id} executes something other than what was shown")
+                failing = det.get("failing_clauses", [])
+                if state == "approved" and det.get("outcome") != "allow":
+                    problems.append(f"determination {det_id} did not allow the payment")
+                if state == "approved_with_override" and det.get("outcome") != "allow" and not (
+                        det.get("outcome") == "refuse" and failing and all(c.get("overridable") for c in failing)
+                        and {c.get("rule_id") for c in failing} <= set(overridden or [])):
+                    problems.append(f"determination {det_id} refused on clauses the payer did not, or could not, override")
+        for msg in problems:
+            payer_bad(f"resolution {rid}: {msg}")
+        if not problems and state != "declined" and (det is not None or not must_disclose):
+            authorised.add(det_id)
     if used_assertions:
         report["presented_hash"] = "matches" if bound_all and report["payer_signatures"] != "failed" else "differs"
 
-    # Money moved or an order was placed: something must have authorised it, and in a full bundle it must be shown.
-    authorised = {r.get("determination_id") for r in records if r.get("record_type") == "resolution"
-                  and r.get("state") in PAYER_STATES + ("proceeded_on_silence",)}
+    # Money moved or an order was placed: only a resolution that passed every check above can have authorised it.
     if must_disclose:
         for r in records:
             ref = r.get("determination_id") if r.get("record_type") == "execution_attempt" else (
                 r.get("payment_ref") if r.get("record_type") == "posting" and r.get("kind") == "hold" else None)
             if ref is not None and ref not in authorised:
                 report["payer_signatures"] = "failed"
-                bad(f"{r.get('record_type')} for {ref}: no approval or silent proceed is disclosed for it")
+                bad(f"{r.get('record_type')} for {ref}: no verified approval or silent proceed authorised it")
                 break
 
     dets = {r["determination_id"]: r for r in bundle.get("records", []) if r.get("record_type") == "determination"}

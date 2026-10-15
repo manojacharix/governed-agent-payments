@@ -242,3 +242,27 @@ def test_an_order_with_no_disclosed_approval_fails(w):
     b = _resign(w, {**b, "records": [r for r in b["records"] if r["record_type"] not in ("resolution", "surface_assertion")]})
     r = _verify(w, b)
     assert r["payer_signatures"] == "failed" and not r["ok"]
+
+
+def test_a_payer_decline_bundle_verifies(w):
+    w.merchant.add_cart("cart-1", LINES)
+    p = w.propose(w.request())
+    w.decline(p)
+    r = _verify(w, builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1"))
+    assert r["ok"], r["problems"]
+    assert r["payer_signatures"] == "ok"
+
+
+def test_an_approval_must_resolve_the_decision_that_executed(w, monkeypatch):
+    """A host records the payer's approval against the first-stage decision instead of the one that executed."""
+    real = type(w.flow)._resolve
+
+    def misbind(self, p, det_id, state, by, *a, **kw):
+        if state == "approved":
+            det_id = p.determination.determination_id  # the proposal-stage decision, not the authorisation one
+        return real(self, p, det_id, state, by, *a, **kw)
+
+    monkeypatch.setattr(type(w.flow), "_resolve", misbind)
+    p = paid(w)
+    r = _verify(w, builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1"))
+    assert r["payer_signatures"] == "failed" and not r["ok"]
