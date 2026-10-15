@@ -156,3 +156,34 @@ def test_an_approval_recorded_without_the_device_proof_does_not_verify(w, monkey
     p = paid(w)
     r = verify_bundle(builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1"), w.host.public_jwk, evaluator=evaluator_digest())
     assert r["payer_signatures"] == "failed" and not r["ok"]
+
+
+def _resign(w, b):
+    from gap_evidence.bundle import _bundle_bytes
+
+    b = {k: v for k, v in b.items() if k != "signature"}
+    b["signature"] = {"key_id": w.flow.keylog.signer.key_id, "alg": "ES256", "value": w.flow.keylog.signer.sign(_bundle_bytes(b))}
+    return b
+
+
+def test_a_host_cannot_hide_the_missing_payer_signature_by_leaving_the_assertion_out(w):
+    p = paid(w)
+    b = builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1")
+    b = _resign(w, {**b, "records": [r for r in b["records"] if r["record_type"] != "surface_assertion"]})
+    r = verify_bundle(b, w.host.public_jwk, evaluator=evaluator_digest())
+    assert r["bundle_signature"] == "ok" and r["payer_signatures"] == "failed" and not r["ok"]
+
+
+def test_a_merchant_bundle_without_assertions_still_verifies(w):
+    p = paid(w)
+    r = verify_bundle(builder(w).build("whl_1", p.proposal_id, role="merchant", requester_ref="mrc_shop"), w.host.public_jwk,
+                      evaluator=evaluator_digest())
+    assert r["ok"] and r["payer_signatures"] == "not_disclosed"
+
+
+def test_an_override_bundle_binds_the_signature_to_the_overridden_clauses(w):
+    w.merchant.add_cart("cart-1", LINES + (CartLine("item_eggs", 1, inr(900)), CartLine("item_jam", 1, inr(800))))
+    p = w.propose(w.request())
+    assert w.override(p, ["max_lines"]).status == "executed"
+    b = builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1")
+    assert verify_bundle(b, w.host.public_jwk, evaluator=evaluator_digest())["payer_signatures"] == "ok"

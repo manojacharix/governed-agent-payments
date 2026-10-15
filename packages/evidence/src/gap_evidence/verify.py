@@ -15,6 +15,7 @@ from gap_core.codec import CodecError, decode
 from gap_core.evaluate import evaluate
 from gap_core.hashing import hash_value
 from gap_core.device_proof import ProofError, verify_device_proof
+from gap_core.hashing import hash_value
 from gap_core.signatures import SignatureError, verify
 from gap_core.timefmt import parse_ts
 
@@ -39,7 +40,13 @@ def _time(rec: dict):
     return None
 
 
-def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str) -> dict:
+ASSERTION_SCOPES = ("payer", "regulator")  # bundles that must carry the payer's assertions (06 §4)
+PAYER_STATES = ("approved", "approved_with_override")
+
+
+def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str, rp_id: str | None = None, origin: str | None = None) -> dict:
+    """rp_id and origin: the relying party the verifier expects for passkey assertions. Without them a WebAuthn
+    assertion is checked against the relying party its own record names, and the report says so."""
     report = {"bundle_signature": "ok", "key_log": "ok", "signatures": "ok", "chain": "ok", "keys": "ok",
               "replay": "not_disclosed", "presented_hash": "not_disclosed", "payer_signatures": "not_disclosed", "attestations": [],
               "problems": []}
@@ -95,8 +102,19 @@ def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str) -> dic
             elif sk["status"] == "compromised" and t >= parse_ts(sk["since"]):
                 report["keys"] = "signed_after_compromise"
 
-    # The payer's consent, checked from the device's own signature rather than the host's record of it.
-    for a in (r for r in bundle.get("records", []) if r.get("record_type") == "surface_assertion"):
+    # The payer's consent, checked from the device's own signature rather than the host's record of it. The host
+    # signs every record, so nothing it wrote about the payer counts on its own: each approval must point to an
+    # assertion the payer's enrolled key signed, over exactly what was approved, while that key was in force.
+    records = bundle.get("records", [])
+    assertions = {r.get("assertion_id"): r for r in records if r.get("record_type") == "surface_assertion"}
+    dets_by_id = {r.get("determination_id"): r for r in records if r.get("record_type") == "determination"}
+    must_disclose = bundle.get("requester_role") in ASSERTION_SCOPES or bundle.get("basis", "default") != "default"
+
+    def payer_bad(msg: str) -> None:
+        report["payer_signatures"] = "failed"
+        bad(msg)
+
+    for a in assertions.values():
         report["payer_signatures"] = "ok" if report["payer_signatures"] == "not_disclosed" else report["payer_signatures"]
         ch, proof, sk, rp = a.get("challenge"), a.get("device_proof"), states.get(a.get("surface_key_id")), a.get("relying_party") or {}
         try:
@@ -104,12 +122,47 @@ def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str) -> dic
                 raise ProofError("the device's proof was not kept")
             if ch.get("subject_hash") != a.get("subject_hash") or ch.get("action") != a.get("action"):
                 raise ProofError("the signed challenge is for a different action or subject")
-            if sk is None:
-                raise ProofError("unknown surface key")
-            verify_device_proof(sk["jwk"], ch, proof, rp_id=rp.get("rp_id"), origin=rp.get("origin"))
+            if sk is None or sk["role"] != "surface":
+                raise ProofError("not an enrolled surface key")
+            t = _time(a)
+            if sk["status"] in ("revoked", "retired") and (t is None or t >= parse_ts(sk["changed"])):
+                raise ProofError(f"the key was {sk['status']} before it signed")
+            if proof.get("format") == "webauthn":
+                if (rp_id, origin) != (None, None) and (rp.get("rp_id"), rp.get("origin")) != (rp_id, origin):
+                    raise ProofError("the passkey assertion is for a relying party other than the one expected")
+                if rp_id is None:
+                    report["relying_party"] = "unpinned"
+            verify_device_proof(sk["jwk"], ch, proof, rp_id=rp_id or rp.get("rp_id"), origin=origin or rp.get("origin"))
         except ProofError as e:
-            report["payer_signatures"] = "failed"
-            bad(f"payer assertion {a.get('assertion_id')}: {e}")
+            payer_bad(f"payer assertion {a.get('assertion_id')}: {e}")
+
+    for res in (r for r in records if r.get("record_type") == "resolution"):
+        state, aid = res.get("state"), res.get("assertion_id")
+        if state in PAYER_STATES or res.get("by") == "payer":
+            if not aid:
+                payer_bad(f"resolution {res.get('resolution_id')}: '{state}' by the payer names no assertion")
+                continue
+            a = assertions.get(aid)
+            if a is None:
+                if must_disclose:
+                    payer_bad(f"resolution {res.get('resolution_id')}: assertion {aid} is not disclosed")
+                continue
+            if a.get("proposal_id", res.get("proposal_id")) != res.get("proposal_id"):
+                payer_bad(f"resolution {res.get('resolution_id')}: assertion {aid} is for another proposal")
+            want_action = {"approved": "authorise", "approved_with_override": "override", "declined": "decline"}.get(state)
+            if want_action and a.get("action") != want_action:
+                payer_bad(f"resolution {res.get('resolution_id')}: '{state}' needs a '{want_action}' assertion, not '{a.get('action')}'")
+            if state == "approved_with_override":
+                first = [d for d in dets_by_id.values() if d.get("stage") == "proposal" and d.get("proposal_id") == res.get("proposal_id")]
+                subjects = {hash_value({"presented_hash": d.get("presented_hash"), "overridden": sorted(res.get("overridden_clauses", []))}) for d in first}
+                if first and a.get("subject_hash") not in subjects:
+                    payer_bad(f"resolution {res.get('resolution_id')}: the payer did not sign an override of these clauses")
+        elif state == "proceeded_on_silence":
+            det = dets_by_id.get(res.get("determination_id"))
+            if det is not None and det.get("approval_mode") != "silent_with_notice":
+                payer_bad(f"resolution {res.get('resolution_id')}: proceeded on silence where a tap was required")
+            elif det is None and must_disclose:
+                payer_bad(f"resolution {res.get('resolution_id')}: the decision that allowed silence is not disclosed")
 
     dets = {r["determination_id"]: r for r in bundle.get("records", []) if r.get("record_type") == "determination"}
     inputs = bundle.get("inputs", {})

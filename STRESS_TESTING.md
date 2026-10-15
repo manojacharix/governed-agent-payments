@@ -82,9 +82,9 @@ The 14 October audit reproduced loopholes that the invariants above did not catc
 5. A payment holds against the cap and budget in its own currency.
 6. A raw signature's strength comes from the user verification recorded with the key at enrolment, never from an unsigned claim.
 7. Agent-supplied extras must be non-negative and in the cart's currency.
-8. Evidence bundles carry the device's signature and challenge, and the open verifier checks the payer's consent from them (`payer_signatures`).
+8. Evidence bundles carry the device's signature and challenge, and the open verifier checks the payer's consent from them (`payer_signatures`): every payer approval in a payer or regulator bundle must point to a disclosed assertion signed by a surface key in force, over exactly what was approved (and, for an override, the clauses overridden); silence is accepted only on a silent-mode decision; passkey relying parties can be pinned.
 
-After the fixes: 605 tests pass in memory mode, 212 again on Postgres state; all ten profiles × two seeds: zero crashes, zero violations, every sampled bundle's payer signatures verify.
+After the fixes: 608 tests pass in memory mode, 215 again on Postgres state; all ten profiles × two seeds: zero crashes, zero violations, every sampled bundle's payer signatures verify.
 
 ## What it does not cover
 
