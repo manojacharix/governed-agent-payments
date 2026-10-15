@@ -75,7 +75,7 @@ def test_expired_missing_or_mismatched_challenges_never_authorise(idn):
 def test_strength_comes_from_the_scale_not_the_device(idn):
     i, phone, _ = idn
     weak = Device("key_weak", user_verification="none")
-    i.enrol_key("pyr_1", weak.key_id, weak.public_jwk, approve_enrol(i, phone, weak.key_id, weak.public_jwk))
+    i.enrol_key("pyr_1", weak.key_id, weak.public_jwk, approve_enrol(i, phone, weak.key_id, weak.public_jwk), user_verification="none")
     with pytest.raises(IdentityError, match="strength_too_low"):
         approve(i, weak, required="auth.strength.override")
 
@@ -312,7 +312,7 @@ def test_answers_are_stored_only_as_argon2_hashes(idn, profile_conn):
 def test_a_compromised_surface_suspends_and_only_another_surface_resumes(idn):
     i, phone, clock = idn
     tablet = Device("key_tablet")
-    i.enrol_key("pyr_1", tablet.key_id, tablet.public_jwk, approve_enrol(i, phone, tablet.key_id, tablet.public_jwk))
+    i.enrol_key("pyr_1", tablet.key_id, tablet.public_jwk, approve_enrol(i, phone, tablet.key_id, tablet.public_jwk), user_verification="inherence")
     assert i.report_compromise(phone.key_id, clock.now()) == "wheel_suspended"
     assert i.wheel_suspended("pyr_1")
     with pytest.raises(IdentityError, match="key_not_active"):

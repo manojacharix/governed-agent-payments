@@ -107,7 +107,7 @@ def b2b(w):
               "corp_team": Spoke("corp_team", "whl_corp", "explicit_tap", a, z, parent_id="corp_company", caps=(Limit(Money(15_000_000, "INR"), month),)),
               "corp_agent": Spoke("corp_agent", "whl_corp", "explicit_tap", a, z, parent_id="corp_team", callers=(buyer.caller_id,),
                                   caps=(Limit(Money(4_000_000, "INR"), month),))}
-    merchant = FakeMerchant("b", w.clock)
+    merchant = FakeMerchant("b", w.clock, merchant_ref="mrc_stationer")
     erp = ERP()
     w.flow.register(Deployment(Wheel("whl_corp", "pyr_corp", "in", budgets=(Limit(Money(200_000_000, "INR"), month),)), spokes, ctx,
                                {"fake-b": merchant}, None, fact_sources=(erp,)))

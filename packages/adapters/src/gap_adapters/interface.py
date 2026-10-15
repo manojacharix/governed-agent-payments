@@ -40,6 +40,7 @@ class CartView:
     fees: tuple[Fee, ...]
     total: Money
     merchant_cart_hash: str
+    merchant_ref: str  # the merchant the cart is at, as the adapter knows it: what the host binds the payment to
 
 
 @dataclass(frozen=True)

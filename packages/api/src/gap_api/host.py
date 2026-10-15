@@ -200,15 +200,14 @@ class Host:
         """Read-only: the spokes this caller may cite, with the room left this window. Nothing about any other spoke."""
         dep = self.flow.deployments[wheel_id]
         at = at or self.flow.clock.now()
-        usage = replay(self.flow.ledger, wheel_id).usage()
+        st = replay(self.flow.ledger, wheel_id)
         out = []
         for s in dep.spokes.values():
             if s.callers is None or caller.caller_id not in s.callers:
                 continue
             caps = []
             for c in s.caps:
-                used = usage.get((s.spoke_id, c.window.window_id(at)))
-                spent = used.amounts.get(c.limit.currency, 0) if used else 0
+                spent = st.usage_in(s.spoke_id, c.window, at).amounts.get(c.limit.currency, 0)
                 caps.append({"limit": c.limit.to_json(), "window": c.window.kind, "remaining_minor": max(0, c.limit.amount_minor - spent)})
             out.append({"spoke_id": s.spoke_id, "approval_mode": s.approval_mode, "status": s.status,
                         "valid_until": format_ts(s.valid_until), "caps": caps, "standing_instruction": s.instruction is not None})

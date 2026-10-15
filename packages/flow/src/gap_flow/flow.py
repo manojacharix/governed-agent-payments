@@ -26,7 +26,7 @@ from gap_core.facts import Fact, FactSet
 from gap_core.hashing import hash_value
 from gap_core.ids import new_id
 from gap_core.money import Money
-from gap_core.proposal import Extra, Proposal, ProposalBody, cart_hash, content_hash
+from gap_core.proposal import Extra, Proposal, ProposalBody, cart_hash, content_hash, payer_subject
 from gap_core.timefmt import format_ts
 from gap_ledger.keylog import KeyLog
 from gap_ledger.ledger import Ledger
@@ -54,7 +54,7 @@ class Invalid:
     """A proposal the host could not even build: unknown adapter, a cart the merchant cannot return, or a cart that
     breaks the money model (mixed currencies, totals beyond 2^53, malformed strings). Nothing is recorded."""
 
-    code: str  # unknown_adapter | cart_unavailable | cart_invalid
+    code: str  # unknown_adapter | cart_unavailable | cart_invalid | merchant_mismatch | extras_invalid
     detail: str = ""
 
 
@@ -226,15 +226,46 @@ class Flow:
             cur = dep.spokes.get(cur.parent_id) if cur.parent_id else None
         return list(reversed(chain))
 
-    def _accounts(self, dep: Deployment, spoke_id: str) -> list[Account]:
-        budget = dep.wheel.budgets[0]
-        accts = [Account(s.spoke_id, s.caps[0].window if s.caps else budget.window, s.caps[0].limit if s.caps else None)
-                 for s in self._chain(dep, spoke_id)]
+    def _accounts(self, dep: Deployment, spoke_id: str, currency: str) -> list[Account]:
+        """The accounts a payment in `currency` posts to: each spoke's cap and the wheel's budget in that currency.
+        A capped spoke with no cap in the currency, or a wheel with no budget in it, has no room (as evaluate() says)."""
+        budget = next((b for b in dep.wheel.budgets if b.limit.currency == currency), None)
+        if budget is None:
+            raise HoldRefused(f"{dep.wheel.wheel_id}: no budget in {currency}")
+        accts = []
+        for s in self._chain(dep, spoke_id):
+            cap = next((c for c in s.caps if c.limit.currency == currency), None)
+            if s.caps and cap is None:
+                raise HoldRefused(f"{s.spoke_id}: no cap in {currency}")
+            accts.append(Account(s.spoke_id, cap.window if cap else budget.window, cap.limit if cap else None))
         return accts + [Account(dep.wheel.wheel_id, budget.window, budget.limit)]
 
     def _usage(self, dep: Deployment, spoke_id: str, at: datetime) -> dict:
-        usage = {(a.owner, a.window.window_id(at)): Usage(0, {}) for a in self._accounts(dep, spoke_id)} if spoke_id in dep.spokes else {}
-        usage.update(replay(self.ledger, dep.wheel.wheel_id).usage())
+        """Usage for every (owner, window) evaluate() may look up: each cap and budget, and the window of every
+        aggregate and velocity rule in force, counted by when each hold was placed (so rolling windows and rule
+        windows that differ from the cap's are exact). Two windows sharing an id keep the larger figures."""
+        if spoke_id not in dep.spokes:
+            return {}
+        w = dep.wheel.wheel_id
+        chain = self._chain(dep, spoke_id)
+        pairs = [(s.spoke_id, c.window) for s in chain for c in s.caps] + [(w, b.window) for b in dep.wheel.budgets]
+        if any(not s.caps for s in chain):
+            pairs += [(s.spoke_id, b.window) for s in chain if not s.caps for b in dep.wheel.budgets]
+        ruled = [(r, w) for r in (*dep.ctx["jurisdiction_rules"], *dep.ctx["tier0_rules"], *dep.wheel.rules)]
+        ruled += [(r, s.spoke_id) for s in chain for r in s.rules]
+        for r, owner in ruled:
+            if r.dimension == "velocity":
+                pairs.append((owner, r.constraint["window"]))
+            elif r.dimension == "amount" and "aggregate" in r.constraint:
+                pairs.append((owner, r.constraint["aggregate"]["window"]))
+        st = replay(self.ledger, w)
+        usage: dict = {}
+        for owner, window in pairs:
+            key, u = (owner, window.window_id(at)), st.usage_in(owner, window, at)
+            if key in usage:
+                old = usage[key]
+                u = Usage(max(old.count, u.count), {c: max(old.amounts.get(c, 0), u.amounts.get(c, 0)) for c in {*old.amounts, *u.amounts}})
+            usage[key] = u
         return usage
 
     def _host_facts(self, dep: Deployment, req: ProposalRequest, extra: tuple = ()) -> FactSet:
@@ -261,6 +292,16 @@ class Flow:
             raise _CartProblem("cart_unavailable", str(e)) from None
         except (ValueError, TypeError, ArithmeticError) as e:
             raise _CartProblem("cart_invalid", str(e)) from None
+        # The merchant is the one the cart is at, never the name the agent cites: otherwise an agent could cite an
+        # allowed merchant and send the order through an adapter (or a marketplace seller) the rules never named.
+        if view.merchant_ref != req.merchant_ref:
+            raise _CartProblem("merchant_mismatch", f"cart {req.cart_ref!r} is not at {req.merchant_ref!r}")
+        # Extras the agent adds (a tip, packaging) can only add to what the merchant charges: a "discount" the
+        # merchant never gave would lower the total every cap, budget and per-payment limit is checked against.
+        for e in req.extras:
+            if e.amount is not None and (not isinstance(e.amount, Money) or e.amount.amount_minor < 0
+                                         or e.amount.currency != view.total.currency):
+                raise _CartProblem("extras_invalid", f"{e.kind}: an extra is a non-negative amount in the cart's currency")
         try:
             extras_total = sum(e.amount.amount_minor for e in req.extras if e.amount is not None)
             body = ProposalBody(req.merchant_ref, req.adapter_id, req.cart_ref, view.lines, Money(view.total.amount_minor + extras_total, view.total.currency),
@@ -351,8 +392,8 @@ class Flow:
     def subject(p: Pending, action: str, overridden: list[str] | None = None) -> str:
         det = p.determination
         if action == "override":
-            return hash_value({"presented_hash": det.presented_hash, "overridden": sorted(overridden or [])})
-        return det.presented_hash or det.proposal_hash
+            return payer_subject(p.proposal_id, det.presented_hash, overridden or [])
+        return payer_subject(p.proposal_id, det.presented_hash or det.proposal_hash)
 
     @atomic(lambda self, a: self.proposals.scope_of(a["proposal_id"]))
     def challenge(self, proposal_id: str, action: str, overridden: list[str] | None = None) -> dict:
@@ -376,9 +417,10 @@ class Flow:
         return info
 
     def _record_assertion(self, p: Pending, info: dict, action: str) -> str:
+        device = {k: info[k] for k in ("challenge", "device_proof", "relying_party") if k in info}
         self.ledger.append(p.wheel_id, {"record_type": "surface_assertion", "assertion_id": info["assertion_id"], "action": action,
                                         "proposal_id": p.proposal_id, "subject_hash": info["subject_hash"], "surface_key_id": info["key_id"],
-                                        "auth_strength_achieved": info["strength"], "occurred_at": format_ts(self.clock.now())},
+                                        "auth_strength_achieved": info["strength"], "occurred_at": format_ts(self.clock.now()), **device},
                            self.signer, record_id=info["assertion_id"])
         return info["assertion_id"]
 
@@ -538,7 +580,7 @@ class Flow:
             bp = dep.spokes[req.spoke_id].instruction.price_tolerance_bp
             amount = Money(amount.amount_minor + (amount.amount_minor * bp + 9999) // 10000, amount.currency)
         try:
-            self.money.hold(p.wheel_id, det2.determination_id, amount, self._accounts(dep, req.spoke_id))
+            self.money.hold(p.wheel_id, det2.determination_id, amount, self._accounts(dep, req.spoke_id, amount.currency))
         except HoldRefused:
             p.status = "failed"
             return p

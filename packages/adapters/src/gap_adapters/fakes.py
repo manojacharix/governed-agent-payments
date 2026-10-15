@@ -30,14 +30,15 @@ class _Cart:
     lines: tuple[CartLine, ...]
     fees: tuple[Fee, ...]
     attributes: dict
+    merchant_ref: str
 
 
 class FakeMerchant:
     def __init__(self, shape: str, clock: Clock, *, script: list[str] | None = None, history_last_n: int | None = None,
-                 currency: str = "INR") -> None:
+                 currency: str = "INR", merchant_ref: str = "mrc_shop") -> None:
         if shape not in ("a", "b"):
             raise ValueError("shape is 'a' or 'b'")
-        self.shape, self.clock, self.currency = shape, clock, currency
+        self.shape, self.clock, self.currency, self.merchant_ref = shape, clock, currency, merchant_ref
         self.script = list(script or [])
         self.history_last_n = history_last_n if shape == "a" and history_last_n is None else history_last_n
         if shape == "a" and history_last_n is None:
@@ -49,10 +50,11 @@ class FakeMerchant:
 
     # --- test controls ------------------------------------------------------------
 
-    def add_cart(self, cart_ref: str, lines, fees=(), attributes=None) -> None:
+    def add_cart(self, cart_ref: str, lines, fees=(), attributes=None, merchant_ref: str | None = None) -> None:
+        """merchant_ref: the merchant the cart is at; a marketplace adapter fronts many (default: this fake's own)."""
         if self.shape == "b":  # fake-b has one flat fee whatever the cart
             fees = (Fee("platform", Money(2500, self.currency)),)
-        self.carts[cart_ref] = _Cart(tuple(lines), tuple(fees), attributes or {})
+        self.carts[cart_ref] = _Cart(tuple(lines), tuple(fees), attributes or {}, merchant_ref or self.merchant_ref)
 
     def set_price(self, cart_ref: str, item_id: str, unit_price: Money) -> None:
         c = self.carts[cart_ref]
@@ -83,7 +85,7 @@ class FakeMerchant:
         c = self.carts[cart_ref]
         total = sum(l.unit_price.amount_minor * l.quantity for l in c.lines) + sum(f.amount.amount_minor for f in c.fees)
         h = hash_value({"lines": [l.to_json() for l in c.lines], "fees": [{"kind": f.kind, "amount": f.amount.to_json()} for f in c.fees]})
-        return CartView(c.lines, c.fees, Money(total, self.currency), h)
+        return CartView(c.lines, c.fees, Money(total, self.currency), h, c.merchant_ref)
 
     def get_item_attributes(self, item_ids: list[str]) -> dict:
         return {}

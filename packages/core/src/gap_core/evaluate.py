@@ -561,7 +561,8 @@ def _drift(inp: EvaluationInput, spoke: Spoke, mode: str, rail: RailProfile | No
     got = sorted((l.item_id, l.variant_id or "", l.quantity) for l in body.lines)
     limit = _worst_case(spoke, ins.reference_total)
     if (
-        want != got or body.merchant_ref != ins.merchant_ref or body.destination_ref != ins.destination_ref
+        want != got or body.merchant_ref != ins.merchant_ref or body.adapter_id != ins.adapter_id
+        or body.destination_ref != ins.destination_ref
         or rail is None or rail.rail_id != ins.rail_id or not _le(body.total, limit)
     ):
         ctx.sys("sys.drift")

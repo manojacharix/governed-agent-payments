@@ -68,6 +68,8 @@ auth_strength_achieved, occurred_at, signature
 ```
 - The host issues a fresh `challenge` with every presentation; an assertion without a matching unexpired challenge is refused (no replayed approvals).
 - `auth_strength_achieved` is derived from `protection_class` + `user_verification` using the jurisdiction's scale, not stated by the surface.
+- For a raw platform signature, `user_verification` is what the platform enforces on the key, recorded in the key log at enrolment; a claim in the assertion is unsigned and never read. For WebAuthn it is the UV flag inside the signed authenticator data (amendment 15 Oct, audit of 14 Oct).
+- The record keeps the challenge and the device's proof, so the open verifier checks the payer's own signature; consent never rests on the host's record alone.
 
 ---
 

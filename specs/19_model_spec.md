@@ -400,7 +400,7 @@ Every adapter implements these operations; contract tests run the same suite aga
 | Operation | Input | Output |
 |---|---|---|
 | `describe()` | | `{adapter_id, version, rails_offered: [RailId], supports_cancel: bool, history_coverage: Coverage}` |
-| `get_cart(cart_ref)` | `Ref` | `{lines, fees, total, merchant_cart_hash: Hash}` |
+| `get_cart(cart_ref)` | `Ref` | `{lines, fees, total, merchant_cart_hash: Hash, merchant_ref}`; the host binds the payment to this `merchant_ref` and refuses a request citing another (`merchant_mismatch`) |
 | `get_item_attributes(item_ids)` | `[Ref]` | `{item_id: {terms: [Ref], source: Ref}}` |
 | `place(cart_ref, rail_id, idempotency_key, destination_ref)` | | `{status: Ref, merchant_order_ref?: Ref, handoff?: {kind: rail_redirect, ref: Ref}}` |
 | `get_order(merchant_order_ref)` | | `{status: Ref, lines, charged?: Money}` |

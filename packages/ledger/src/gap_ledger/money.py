@@ -17,7 +17,7 @@ from gap_core.evaluate import Usage
 from gap_core.ids import new_id
 from gap_core.money import Money
 from gap_core.signatures import Signer
-from gap_core.timefmt import format_ts
+from gap_core.timefmt import format_ts, parse_ts
 
 from .ledger import Ledger, LedgerError
 
@@ -68,12 +68,25 @@ class PaymentState:
 
 
 @dataclass
+class Entry:
+    """One payment on one owner: what it holds and spends there, and when its hold was placed."""
+
+    currency: str
+    held: int = 0
+    spent: int = 0
+    hold_at: datetime | None = None
+
+
+@dataclass
 class State:
     accounts: dict = field(default_factory=dict)  # {(owner, currency, window_id): AccountState}
     payments: dict = field(default_factory=dict)  # {payment_ref: PaymentState}
+    entries: dict = field(default_factory=dict)   # {owner: {payment_ref: Entry}}
 
     def usage(self) -> dict:
-        """Held plus spent per (owner, window_id), as evaluate() expects (19 §6)."""
+        """Held plus spent per (owner, window_id) of the windows postings were made in (19 §6). For a limit's own
+        calendar window this is exact; for any other window (a rolling one, or a rule's window that differs from the
+        cap's) use usage_in(), which counts by when each hold was placed."""
         out: dict = {}
         for (owner, currency, window_id), a in self.accounts.items():
             u = out.get((owner, window_id), Usage(0, {}))
@@ -81,6 +94,16 @@ class State:
             amounts[currency] = amounts.get(currency, 0) + a.held + a.spent
             out[(owner, window_id)] = Usage(u.count + a.holds_placed, amounts)
         return out
+
+    def usage_in(self, owner: str, window: Window, at: datetime) -> Usage:
+        """Held plus spent, and the number of holds, for every payment on `owner` whose hold falls in the instance of
+        `window` that `at` is in. A payment stays in the window its hold was placed in, whatever happens to it later."""
+        count, amounts = 0, {}
+        for e in self.entries.get(owner, {}).values():
+            if e.hold_at is not None and window.contains(e.hold_at, at):
+                count += 1
+                amounts[e.currency] = amounts.get(e.currency, 0) + e.held + e.spent
+        return Usage(count, amounts)
 
 
 def replay(ledger: Ledger, wheel_id: str) -> State:
@@ -91,8 +114,12 @@ def replay(ledger: Ledger, wheel_id: str) -> State:
         key = (aset["owner"], aset["currency"], aset["window_id"])
         a = st.accounts.setdefault(key, AccountState())
         p = st.payments.setdefault(pref, PaymentState())
+        e = st.entries.setdefault(aset["owner"], {}).setdefault(pref, Entry(aset["currency"]))
+        e.held += amt if kind == "hold" else -amt if kind in ("capture", "release") else 0
+        e.spent += amt if kind in ("capture", "overcapture") else -amt if kind == "refund" else 0
         first_account = not p.accounts or aset["owner"] == next(iter(p.accounts))
         if kind == "hold":
+            e.hold_at = parse_ts(rec["posted_at"])
             a.held += amt
             a.holds_placed += 1
             p.accounts[aset["owner"]] = (aset["currency"], aset["window_id"])
@@ -154,8 +181,7 @@ class MoneyInFlight:
                     continue
                 if acc.limit.currency != amount.currency:
                     raise HoldRefused(f"{acc.owner}: limit is in {acc.limit.currency}, payment in {amount.currency}")
-                a = st.accounts.get((acc.owner, amount.currency, acc.window.window_id(at)), AccountState())
-                available = acc.limit.amount_minor - a.held - a.spent
+                available = acc.limit.amount_minor - st.usage_in(acc.owner, acc.window, at).amounts.get(amount.currency, 0)
                 if available < 0:
                     raise HoldRefused(f"{acc.owner}: overspent; no new holds until available ≥ 0")
                 if amount.amount_minor > available:

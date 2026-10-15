@@ -18,6 +18,7 @@ from .ledger import Ledger, LedgerError
 
 ROLES = ("surface", "recovery_key", "caller", "host", "operator", "source", "evaluator_release")
 PROTECTION = ("hardware_attested", "hardware", "software")
+USER_VERIFICATION = ("inherence", "knowledge", "none")
 TIME_FIELDS = ("posted_at", "occurred_at", "evaluated_at", "issued_at", "released_at", "received_at", "at")
 
 
@@ -32,6 +33,7 @@ class KeyState:
     valid_from: datetime
     changed_at: datetime
     compromised_since: datetime | None = None
+    user_verification: str = "none"  # what the platform enforces before the key will sign (07 §3), recorded at enrolment
 
 
 def record_time(rec: dict) -> datetime | None:
@@ -59,15 +61,16 @@ class KeyLog:
             algorithm="ES256", protection_class="software", valid_from=format_ts(self.clock.now()), enrolled_by="bootstrap",
         )
 
-    def enrol(self, key_id: str, *, role: str, principal_ref: str, public_key: dict, protection_class: str, enrolled_by: str) -> dict:
-        if role not in ROLES or protection_class not in PROTECTION:
-            raise LedgerError("unknown role or protection class")
+    def enrol(self, key_id: str, *, role: str, principal_ref: str, public_key: dict, protection_class: str, enrolled_by: str,
+              user_verification: str = "none") -> dict:
+        if role not in ROLES or protection_class not in PROTECTION or user_verification not in USER_VERIFICATION:
+            raise LedgerError("unknown role, protection class or user verification")
         public_key_from_jwk(public_key)  # must be a valid P-256 key
         if key_id in self.state():
             raise LedgerError(f"{key_id} is already in the key log")
         return self._entry(key_id, "active", principal_role=role, principal_ref=principal_ref, public_key=public_key,
                            algorithm="ES256", protection_class=protection_class, valid_from=format_ts(self.clock.now()),
-                           enrolled_by=enrolled_by)
+                           enrolled_by=enrolled_by, user_verification=user_verification)
 
     def _change(self, key_id: str, status: str, **extra) -> dict:
         cur = self.state().get(key_id)
@@ -93,11 +96,12 @@ class KeyLog:
             at = parse_ts(rec["at"])
             if prev is None:
                 out[rec["key_id"]] = KeyState(rec["key_id"], rec["principal_role"], rec["principal_ref"], rec["public_key"],
-                                              rec["protection_class"], rec["status"], parse_ts(rec["valid_from"]), at)
+                                              rec["protection_class"], rec["status"], parse_ts(rec["valid_from"]), at,
+                                              user_verification=rec.get("user_verification", "none"))
             else:
                 cs = parse_ts(rec["compromised_since"]) if "compromised_since" in rec else prev.compromised_since
                 out[rec["key_id"]] = KeyState(prev.key_id, prev.principal_role, prev.principal_ref, prev.public_key,
-                                              prev.protection_class, rec["status"], prev.valid_from, at, cs)
+                                              prev.protection_class, rec["status"], prev.valid_from, at, cs, prev.user_verification)
         return out
 
     def public_keys(self) -> dict[str, dict]:

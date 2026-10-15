@@ -44,7 +44,7 @@ from gap_ledger.keylog import KeyLog
 from gap_ledger.ledger import Ledger
 from gap_state.store import Kind, MemoryStore
 
-from .webauthn import WebAuthnError, verify_assertion as verify_webauthn
+from gap_core.device_proof import ProofError, challenge_bytes, kept_proof, verify_device_proof
 
 PROTECTION_RANK = {"software": 0, "hardware": 1, "hardware_attested": 2}
 UV_FACTOR = {"inherence": "inherence", "knowledge": "knowledge", "none": None}
@@ -134,6 +134,7 @@ class Recovery:
     new_jwk: dict
     completes_at: datetime
     status: str = "pending"
+    new_key_user_verification: str = "none"
 
 
 def _dict_kind(name, *, scope=lambda d: d.get("payer_ref", ""), status=lambda d: "", expires=lambda d: None):
@@ -223,7 +224,7 @@ class Identity:
 
     @staticmethod
     def challenge_bytes(ch: dict) -> bytes:
-        return hashlib.sha256(canonical({k: ch[k] for k in ("challenge_id", "nonce", "action", "subject_hash")})).digest()
+        return challenge_bytes(ch)
 
     @atomic(_payer)
     def verify_assertion(self, assertion: dict, *, payer_ref: str, action: str, subject_hash: str,
@@ -247,28 +248,32 @@ class Identity:
         if key.status != "active":
             raise IdentityError("key_not_active", key.status)
         proof = assertion.get("proof", {})
-        if proof.get("format") == "raw_es256":
-            try:
-                verify(key.public_key, self.challenge_bytes(ch), proof.get("value", ""))
-            except SignatureError as e:
-                raise IdentityError("bad_signature", str(e)) from None
-            uv = assertion.get("user_verification", "none")  # the platform enforced it on the key (07 §3)
-        elif proof.get("format") == "webauthn":
-            try:
-                uv = "inherence" if verify_webauthn(key.public_key, self.challenge_bytes(ch), proof, rp_id=self.rp_id, origin=self.origin) else "none"
-            except WebAuthnError as e:
-                raise IdentityError("bad_signature", str(e)) from None
-        else:
+        if not isinstance(proof, dict) or proof.get("format") not in ("raw_es256", "webauthn"):
             raise IdentityError("bad_proof_format")
+        try:
+            authenticator_uv = verify_device_proof(key.public_key, ch, proof, rp_id=self.rp_id, origin=self.origin)
+        except ProofError as e:
+            raise IdentityError("bad_signature", str(e)) from None
+        if proof["format"] == "raw_es256":
+            # A raw signature proves possession only. User verification is what the platform enforces on this key,
+            # recorded when it was enrolled (07 §3); a "user_verification" field in the assertion is not signed, so it
+            # is never read: anyone holding the key could claim a biometric that never happened.
+            uv = key.user_verification
+        else:
+            uv = "inherence" if authenticator_uv else "none"  # the UV flag is inside the signed authenticator data
         achieved = self.strength(key.protection_class, uv)
         if required:
             self._need(achieved, required)
         ch["used"] = True
         self.store.checkpoint()  # consumed for good, even if the rest of the operation fails or the process dies
         aid = new_id("asr", clock=self.clock, rng=self._rng)
+        # Keep what the device signed and its signature, so anyone can check the payer's consent later (07 §3).
+        device = {"challenge": {k: ch[k] for k in ("challenge_id", "nonce", "action", "subject_hash")}, "device_proof": kept_proof(proof)}
+        if proof["format"] == "webauthn":
+            device["relying_party"] = {"rp_id": self.rp_id, "origin": self.origin}
         self._record({"record_type": "surface_assertion", "assertion_id": aid, "challenge_id": cid, "key_id": key.key_id, "action": action,
-                      "subject_hash": subject_hash, "user_verification": uv or "none", "auth_strength_achieved": achieved}, aid)
-        return {"assertion_id": aid, "key_id": key.key_id, "strength": achieved, "role": key.principal_role}
+                      "subject_hash": subject_hash, "user_verification": uv or "none", "auth_strength_achieved": achieved, **device}, aid)
+        return {"assertion_id": aid, "key_id": key.key_id, "strength": achieved, "role": key.principal_role, **device}
 
     # --- surfaces and recovery keys ---------------------------------------------------------------
 
@@ -285,21 +290,28 @@ class Identity:
             raise IdentityError("already_enrolled", "further surfaces need an existing surface's approval")
         cls = self._protection(attestation)
         self._need(self.strength(cls, user_verification), "auth.strength.enrol_surface")
-        self.keylog.enrol(key_id, role="surface", principal_ref=payer_ref, public_key=public_jwk, protection_class=cls, enrolled_by="onboarding")
+        self.keylog.enrol(key_id, role="surface", principal_ref=payer_ref, public_key=public_jwk, protection_class=cls, enrolled_by="onboarding",
+                          user_verification=user_verification)
 
     @staticmethod
     def key_subject(key_id: str, public_jwk: dict, role: str) -> str:
         return hash_value({"key_id": key_id, "public_key": public_jwk, "role": role})
 
     @atomic(_payer)
-    def enrol_key(self, payer_ref: str, key_id: str, public_jwk: dict, approval: dict, *, role: str = "surface", attestation=None) -> None:
-        """A further surface, or a recovery-only key, approved by an existing active surface."""
+    def enrol_key(self, payer_ref: str, key_id: str, public_jwk: dict, approval: dict, *, role: str = "surface", attestation=None,
+                  user_verification: str = "none") -> None:
+        """A further surface, or a recovery-only key, approved by an existing active surface. `user_verification` is what
+        the platform enforces before the surface key signs (biometric, passcode or nothing); it is recorded with the key
+        and is all a raw signature can ever claim. A recovery key reports user verification in each WebAuthn assertion."""
         if role not in ("surface", "recovery_key"):
             raise IdentityError("bad_role")
+        if user_verification not in ("inherence", "knowledge", "none"):
+            raise IdentityError("bad_request", "user_verification is inherence, knowledge or none")
         info = self.verify_assertion(approval, payer_ref=payer_ref, action="enrol", subject_hash=self.key_subject(key_id, public_jwk, role),
                                      required="auth.strength.enrol_surface")
         cls = self._protection(attestation) if role == "surface" else "hardware"
-        self.keylog.enrol(key_id, role=role, principal_ref=payer_ref, public_key=public_jwk, protection_class=cls, enrolled_by=info["assertion_id"])
+        self.keylog.enrol(key_id, role=role, principal_ref=payer_ref, public_key=public_jwk, protection_class=cls, enrolled_by=info["assertion_id"],
+                          user_verification=user_verification if role == "surface" else "none")
 
     # --- callers: enrolment, OAuth 2.1 + PKCE, proposal proofs -------------------------------------------
 
@@ -515,7 +527,8 @@ class Identity:
             raise IdentityError("insufficient_factors", "a recovery key, or the external check for the delayed path")
         delay = 0 if path == "with_recovery_key" else self.params["identity.recovery_delay"]
         rid = new_id("rcv", clock=self.clock, rng=self._rng)
-        r = Recovery(rid, payer_ref, path, new_key_id, new_jwk, self._now() + timedelta(seconds=delay))
+        r = Recovery(rid, payer_ref, path, new_key_id, new_jwk, self._now() + timedelta(seconds=delay),
+                     new_key_user_verification=new_key_user_verification)
         self.recoveries[rid] = r
         self._record({"record_type": "recovery_case", "recovery_id": rid, "path": path, "status": "pending",
                       "completes_at": format_ts(r.completes_at), "factors": ["knowledge", "inherence"] + (["possession"] if path == "with_recovery_key" else ["external"])}, rid)
@@ -542,7 +555,7 @@ class Identity:
         for k in self._payer_surfaces(r.payer_ref):
             self.keylog.revoke(k.key_id)
         self.keylog.enrol(r.new_key_id, role="surface", principal_ref=r.payer_ref, public_key=r.new_jwk, protection_class="software",
-                          enrolled_by=r.recovery_id)
+                          enrolled_by=r.recovery_id, user_verification=r.new_key_user_verification)
         r.status = "completed"
         self.suspended_payers.pop(r.payer_ref, None)
         self._record({"record_type": "recovery_case", "recovery_id": r.recovery_id, "status": "completed"}, r.recovery_id)

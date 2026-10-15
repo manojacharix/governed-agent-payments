@@ -71,6 +71,21 @@ uv run python tools/simulate.py 42 40 3000           # one long default run with
 - **Durable state (2026-10-13):** the same ten profiles × two seeds on Postgres working state: zero violations, results identical to memory. Restart, cross-process race, concurrent-scheduler and crash tests pass (including a crash in each window between committing an approval and recording the merchant's answer, with recovery after a grace period), and mutation checks confirm they fail if the per-payer lock, the version check or the lock's survival across a checkpoint is removed.
 - **575 tests pass in memory mode; the flow, API, identity and evidence suites (182 tests) pass again on Postgres state in CI.**
 
+## Audit fixes (2026-10-15)
+
+The 14 October audit reproduced loopholes that the invariants above did not catch, because the simulator never tried them. All are closed, each with a regression test (`packages/flow/tests/test_audit_2026_10_14.py`, plus three in `packages/evidence/tests/test_evidence.py`):
+
+1. The cited merchant is now the one the cart is at (reported by the adapter); a request citing another is refused, so an allowlist cannot be bypassed through another adapter or marketplace seller.
+2. A silent repeat drifts (and falls back to a tap) if it goes through any adapter other than the instruction's.
+3. Rolling windows accumulate: usage counts each payment by when its hold was placed.
+4. Velocity and aggregate rules whose window differs from the cap's are counted exactly, instead of always refusing.
+5. A payment holds against the cap and budget in its own currency.
+6. A raw signature's strength comes from the user verification recorded with the key at enrolment, never from an unsigned claim.
+7. Agent-supplied extras must be non-negative and in the cart's currency.
+8. Evidence bundles carry the device's signature and challenge, and the open verifier checks the payer's consent from them (`payer_signatures`): every payer approval in a payer or regulator bundle must point to a disclosed assertion signed by a surface key in force, over exactly what was approved (and, for an override, the clauses overridden); silence is accepted only on a silent-mode decision; passkey relying parties and the requester's role can be pinned. What the payer signs binds the proposal id, so a signature cannot be replayed onto another proposal with the same cart, and in a full bundle any check that cannot run fails. Each approval must resolve this proposal's own authorisation decision, which must permit the payment and execute what was signed; only resolutions that pass every check can account for an order or a hold.
+
+After the fixes: 614 tests pass in memory mode, 221 again on Postgres state; all ten profiles × two seeds: zero crashes, zero violations, every sampled bundle's payer signatures verify.
+
 ## What it does not cover
 
 - **Real separate machines.** Since 2026-10-13 working state can live in Postgres (`gap_state`), and tests run several host processes against one database: restarts, approvals racing across processes, schedulers ticking at once, a crash at the point of no return. `tools/stress.py --durable` runs every profile on Postgres state (all clean, identical results to memory). Those "processes" share one machine and one Postgres; network partitions and database failover are not simulated.
