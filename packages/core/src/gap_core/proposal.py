@@ -132,6 +132,16 @@ def presented_hash(body: ProposalBody, rail_id: str) -> str:
     )
 
 
+def payer_subject(proposal_id: str, presented: str, overridden=None) -> str:
+    """What the payer's device signs for a proposal (07 §3): this proposal, exactly as presented, and for an override
+    the clauses set aside. Binding the proposal id means a signature can never be moved to another proposal that
+    happens to show the same cart."""
+    body = {"proposal_id": proposal_id, "presented_hash": presented}
+    if overridden is not None:
+        body["overridden"] = sorted(overridden)
+    return hash_value(body)
+
+
 @dataclass(frozen=True)
 class Proposal:
     proposal_id: str

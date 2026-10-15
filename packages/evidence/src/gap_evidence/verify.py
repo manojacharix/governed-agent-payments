@@ -14,8 +14,10 @@ from gap_core.chain import ChainError, record_hash, unsigned_bytes, verify_chain
 from gap_core.codec import CodecError, decode
 from gap_core.evaluate import evaluate
 from gap_core.hashing import hash_value
+from gap_core.proposal import payer_subject
 from gap_core.device_proof import ProofError, verify_device_proof
 from gap_core.hashing import hash_value
+from gap_core.proposal import payer_subject
 from gap_core.signatures import SignatureError, verify
 from gap_core.timefmt import parse_ts
 
@@ -44,9 +46,12 @@ ASSERTION_SCOPES = ("payer", "regulator")  # bundles that must carry the payer's
 PAYER_STATES = ("approved", "approved_with_override")
 
 
-def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str, rp_id: str | None = None, origin: str | None = None) -> dict:
+def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str, rp_id: str | None = None, origin: str | None = None,
+                  expect_role: str | None = None) -> dict:
     """rp_id and origin: the relying party the verifier expects for passkey assertions. Without them a WebAuthn
-    assertion is checked against the relying party its own record names, and the report says so."""
+    assertion is checked against the relying party its own record names, and the report says so.
+    expect_role: who asked for the bundle. The host writes requester_role; a requester who passes their own role
+    stops a host relabelling a payer's bundle as a merchant's to drop the payer's assertions from it."""
     report = {"bundle_signature": "ok", "key_log": "ok", "signatures": "ok", "chain": "ok", "keys": "ok",
               "replay": "not_disclosed", "presented_hash": "not_disclosed", "payer_signatures": "not_disclosed", "attestations": [],
               "problems": []}
@@ -108,7 +113,11 @@ def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str, rp_id:
     records = bundle.get("records", [])
     assertions = {r.get("assertion_id"): r for r in records if r.get("record_type") == "surface_assertion"}
     dets_by_id = {r.get("determination_id"): r for r in records if r.get("record_type") == "determination"}
-    must_disclose = bundle.get("requester_role") in ASSERTION_SCOPES or bundle.get("basis", "default") != "default"
+    if expect_role is not None and bundle.get("requester_role") != expect_role:
+        report["payer_signatures"] = "failed"
+        bad(f"bundle is labelled for {bundle.get('requester_role')!r}, but was requested by {expect_role!r}")
+    must_disclose = (bundle.get("requester_role") in ASSERTION_SCOPES or expect_role in ASSERTION_SCOPES
+                     or bundle.get("basis", "default") != "default")
 
     def payer_bad(msg: str) -> None:
         report["payer_signatures"] = "failed"
@@ -136,33 +145,68 @@ def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str, rp_id:
         except ProofError as e:
             payer_bad(f"payer assertion {a.get('assertion_id')}: {e}")
 
+    # Every payer resolution, bound to this proposal as it was presented. In a payer or regulator bundle anything
+    # missing fails: a check that cannot run is a failure, never a pass.
+    first_by_proposal = {}
+    for d in dets_by_id.values():
+        if d.get("stage") == "proposal":
+            first_by_proposal.setdefault(d.get("proposal_id"), []).append(d)
+    used_assertions, used_challenges = set(), set()
+    bound_all = True
     for res in (r for r in records if r.get("record_type") == "resolution"):
-        state, aid = res.get("state"), res.get("assertion_id")
+        state, aid, rid, pid = res.get("state"), res.get("assertion_id"), res.get("resolution_id"), res.get("proposal_id")
         if state in PAYER_STATES or res.get("by") == "payer":
             if not aid:
-                payer_bad(f"resolution {res.get('resolution_id')}: '{state}' by the payer names no assertion")
+                payer_bad(f"resolution {rid}: '{state}' by the payer names no assertion")
                 continue
             a = assertions.get(aid)
             if a is None:
                 if must_disclose:
-                    payer_bad(f"resolution {res.get('resolution_id')}: assertion {aid} is not disclosed")
+                    payer_bad(f"resolution {rid}: assertion {aid} is not disclosed")
                 continue
-            if a.get("proposal_id", res.get("proposal_id")) != res.get("proposal_id"):
-                payer_bad(f"resolution {res.get('resolution_id')}: assertion {aid} is for another proposal")
+            cid = (a.get("challenge") or {}).get("challenge_id")
+            if aid in used_assertions or (cid is not None and cid in used_challenges):
+                payer_bad(f"resolution {rid}: assertion {aid} already backs another resolution")
+            used_assertions.add(aid)
+            used_challenges.add(cid)
+            if a.get("proposal_id") is None or a.get("proposal_id") != pid:
+                payer_bad(f"resolution {rid}: assertion {aid} is not for proposal {pid}")
             want_action = {"approved": "authorise", "approved_with_override": "override", "declined": "decline"}.get(state)
-            if want_action and a.get("action") != want_action:
-                payer_bad(f"resolution {res.get('resolution_id')}: '{state}' needs a '{want_action}' assertion, not '{a.get('action')}'")
-            if state == "approved_with_override":
-                first = [d for d in dets_by_id.values() if d.get("stage") == "proposal" and d.get("proposal_id") == res.get("proposal_id")]
-                subjects = {hash_value({"presented_hash": d.get("presented_hash"), "overridden": sorted(res.get("overridden_clauses", []))}) for d in first}
-                if first and a.get("subject_hash") not in subjects:
-                    payer_bad(f"resolution {res.get('resolution_id')}: the payer did not sign an override of these clauses")
+            if want_action is None or a.get("action") != want_action:
+                payer_bad(f"resolution {rid}: '{state}' needs a matching assertion, not '{a.get('action')}'")
+            first = first_by_proposal.get(pid, [])
+            if not first:
+                bound_all = False
+                if must_disclose:
+                    payer_bad(f"resolution {rid}: the decision the payer was shown is not disclosed")
+                continue
+            overridden = res.get("overridden_clauses", []) if state == "approved_with_override" else None
+            subjects = {payer_subject(pid, d.get("presented_hash") or d.get("proposal_hash"), overridden) for d in first}
+            if a.get("subject_hash") not in subjects:
+                bound_all = False
+                payer_bad(f"resolution {rid}: the payer did not sign this proposal as shown"
+                          + (" with these clauses overridden" if overridden is not None else ""))
         elif state == "proceeded_on_silence":
             det = dets_by_id.get(res.get("determination_id"))
-            if det is not None and det.get("approval_mode") != "silent_with_notice":
-                payer_bad(f"resolution {res.get('resolution_id')}: proceeded on silence where a tap was required")
-            elif det is None and must_disclose:
-                payer_bad(f"resolution {res.get('resolution_id')}: the decision that allowed silence is not disclosed")
+            if det is None:
+                if must_disclose:
+                    payer_bad(f"resolution {rid}: the decision that allowed silence is not disclosed")
+            elif det.get("approval_mode") != "silent_with_notice" or det.get("proposal_id") != pid:
+                payer_bad(f"resolution {rid}: proceeded on silence where a tap was required")
+    if used_assertions:
+        report["presented_hash"] = "matches" if bound_all and report["payer_signatures"] != "failed" else "differs"
+
+    # Money moved or an order was placed: something must have authorised it, and in a full bundle it must be shown.
+    authorised = {r.get("determination_id") for r in records if r.get("record_type") == "resolution"
+                  and r.get("state") in PAYER_STATES + ("proceeded_on_silence",)}
+    if must_disclose:
+        for r in records:
+            ref = r.get("determination_id") if r.get("record_type") == "execution_attempt" else (
+                r.get("payment_ref") if r.get("record_type") == "posting" and r.get("kind") == "hold" else None)
+            if ref is not None and ref not in authorised:
+                report["payer_signatures"] = "failed"
+                bad(f"{r.get('record_type')} for {ref}: no approval or silent proceed is disclosed for it")
+                break
 
     dets = {r["determination_id"]: r for r in bundle.get("records", []) if r.get("record_type") == "determination"}
     inputs = bundle.get("inputs", {})
@@ -186,14 +230,6 @@ def verify_bundle(bundle: dict, pinned_host_jwk: dict, *, evaluator: str, rp_id:
                 bad(f"{det_id}: {e}")
         if report["replay"] == "reproduced" and any(r.get("versions", {}).get("evaluator") != evaluator for r in dets.values()):
             report["replay"] = "evaluator_unpublished"
-
-    asr = [r for r in bundle.get("records", []) if r.get("record_type") == "surface_assertion" and r.get("action") == "authorise"]
-    first = [r for r in dets.values() if r.get("stage") == "proposal"]
-    if asr and first:
-        shown = {r.get("presented_hash") for r in first}
-        report["presented_hash"] = "matches" if all(a.get("subject_hash") in shown for a in asr) else "differs"
-        if report["presented_hash"] == "differs":
-            bad("the payer approved something other than what was shown")
 
     report["ok"] = not report["problems"]
     return report

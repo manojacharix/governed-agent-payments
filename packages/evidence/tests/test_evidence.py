@@ -187,3 +187,58 @@ def test_an_override_bundle_binds_the_signature_to_the_overridden_clauses(w):
     assert w.override(p, ["max_lines"]).status == "executed"
     b = builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1")
     assert verify_bundle(b, w.host.public_jwk, evaluator=evaluator_digest())["payer_signatures"] == "ok"
+
+
+def _verify(w, b, **kw):
+    return verify_bundle(b, w.host.public_jwk, evaluator=evaluator_digest(), **kw)
+
+
+def test_a_payer_signature_cannot_be_replayed_onto_another_proposal_with_the_same_cart(w, monkeypatch):
+    w.merchant.add_cart("cart-1", LINES)
+    w.merchant.add_cart("cart-2", LINES)
+    a = w.propose(w.request("cart-1", "i-1"))
+    real = w.flow.identity.verify_assertion
+    kept = {}
+
+    def capture(assertion, **kw):
+        info = real(assertion, **kw)
+        kept.setdefault("first", {k: info[k] for k in ("challenge", "device_proof")})
+        return info
+
+    monkeypatch.setattr(w.flow.identity, "verify_assertion", capture)
+    w.approve(a)
+    b = w.propose(w.request("cart-2", "i-2"))  # the same cart and total: the same presented hash
+
+    def replay_first(assertion, **kw):
+        info = real(assertion, **kw)
+        return {**info, **kept["first"]}  # the host swaps in the payer's signature from the first proposal
+
+    monkeypatch.setattr(w.flow.identity, "verify_assertion", replay_first)
+    w.approve(b)
+    r = _verify(w, builder(w).build("whl_1", b.proposal_id, role="payer", requester_ref="pyr_1"))
+    assert r["payer_signatures"] == "failed" and not r["ok"]
+
+
+def test_a_payer_bundle_hiding_the_decision_that_was_shown_fails(w):
+    p = paid(w)
+    b = builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1")
+    b = _resign(w, {**b, "inputs": {}, "records": [r for r in b["records"] if not (r["record_type"] == "determination" and r["stage"] == "proposal")]})
+    r = _verify(w, b)
+    assert r["payer_signatures"] == "failed" and not r["ok"]
+
+
+def test_a_payer_bundle_relabelled_for_a_merchant_fails_when_the_payer_says_who_asked(w):
+    p = paid(w)
+    b = builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1")
+    b = _resign(w, {**b, "requester_role": "merchant", "records": [r for r in b["records"] if r["record_type"] != "surface_assertion"]})
+    assert _verify(w, b)["ok"]  # alone, the label is the host's word
+    r = _verify(w, b, expect_role="payer")
+    assert r["payer_signatures"] == "failed" and not r["ok"]
+
+
+def test_an_order_with_no_disclosed_approval_fails(w):
+    p = paid(w)
+    b = builder(w).build("whl_1", p.proposal_id, role="payer", requester_ref="pyr_1")
+    b = _resign(w, {**b, "records": [r for r in b["records"] if r["record_type"] not in ("resolution", "surface_assertion")]})
+    r = _verify(w, b)
+    assert r["payer_signatures"] == "failed" and not r["ok"]

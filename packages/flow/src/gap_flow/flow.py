@@ -26,7 +26,7 @@ from gap_core.facts import Fact, FactSet
 from gap_core.hashing import hash_value
 from gap_core.ids import new_id
 from gap_core.money import Money
-from gap_core.proposal import Extra, Proposal, ProposalBody, cart_hash, content_hash
+from gap_core.proposal import Extra, Proposal, ProposalBody, cart_hash, content_hash, payer_subject
 from gap_core.timefmt import format_ts
 from gap_ledger.keylog import KeyLog
 from gap_ledger.ledger import Ledger
@@ -392,8 +392,8 @@ class Flow:
     def subject(p: Pending, action: str, overridden: list[str] | None = None) -> str:
         det = p.determination
         if action == "override":
-            return hash_value({"presented_hash": det.presented_hash, "overridden": sorted(overridden or [])})
-        return det.presented_hash or det.proposal_hash
+            return payer_subject(p.proposal_id, det.presented_hash, overridden or [])
+        return payer_subject(p.proposal_id, det.presented_hash or det.proposal_hash)
 
     @atomic(lambda self, a: self.proposals.scope_of(a["proposal_id"]))
     def challenge(self, proposal_id: str, action: str, overridden: list[str] | None = None) -> dict:
