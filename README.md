@@ -84,4 +84,6 @@ Vocabulary terms such as `std:mcc:7995` are referenced by code only. The ISO 182
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Source available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may read, run and modify the code for personal use, research, study and other noncommercial purposes.
+
+Commercial use needs written permission. If you want to use this in a product or inside a company, get in touch through [manojachari.com](https://www.manojachari.com) to agree a commercial license.
