@@ -81,3 +81,9 @@ make simulate      # synthetic run of the full flow: 40 payers, 3,000 proposals 
 | `tier0/examples/` | Two operators on the same core: a personal ordering service and a B2B procurement policy (matched PO, approved supplier, no silence), plus a UK personal example |
 
 Vocabulary terms such as `std:mcc:7995` are referenced by code only. The ISO 18245 and GS1 code lists themselves are not shipped until their redistribution licences are confirmed.
+
+## License
+
+Source available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may read, run and modify the code for personal use, research, study and other noncommercial purposes.
+
+Commercial use needs written permission. If you want to use this in a product or inside a company, get in touch through [manojachari.com](https://www.manojachari.com) to agree a commercial license.
