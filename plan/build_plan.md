@@ -2,7 +2,7 @@
 
 **Status:** written 9 Oct 2026. Builds the infrastructure in `../specs/` and nothing else: no product, no merchant integration, no app. Where this plan and a spec disagree, the spec wins.
 
-**Progress:** Phases 1 to 9 done (publication gate reached; publishing is Manoj's call), with a synthetic-workload harness (`make simulate`) that each later phase extends. **Next action:** Phase 5 (merchant adapters, rails, execution).
+**Progress:** Phases 1 to 9 done (published 16 Oct 2026 as `v0.1.0`), with a synthetic-workload harness (`make simulate`) that each later phase extends. **Next action:** the open items before real deployment listed in the README status.
 
 ---
 
@@ -67,7 +67,7 @@ governed-agent-payments/
 **Phase 8: interfaces.** HTTP API over Phases 2 to 7; governance MCP server (`propose_order`, `get_determination`, `list_proposals`, `proceed_to_pay` as a hand-off, `request_change`, read-only spoke views). Second operator example (B2B procurement) running through the same API.
 *Demo:* an MCP client proposes against `fake-b`; the reference surface approves.
 
-> **Publication gate** (when Manoj decides to publish): after Phase 8. The LinkedIn embargo on this topic holds until Manoj releases it.
+> **Publication gate:** after Phase 8. Reached; the repository was made public on 16 Oct 2026.
 
 **Phase 9: evidence rendering and demo.** Readable timeline generated from a bundle and labelled a rendering; worked example; `make demo` with golden files.
 
