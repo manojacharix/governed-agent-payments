@@ -1,7 +1,7 @@
 [project]
 name = "gap-core"
 version = "0.1.0"
-description = "Pure core: types, Money, canonical JSON, hashing, signature verification, hash chains"
+description = "Pure core: types, Money, canonical JSON, hashing, signature verification, hash chains and evaluate()"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]

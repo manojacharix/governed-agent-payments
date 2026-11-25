@@ -2,7 +2,7 @@
 
 **Status:** written 9 Oct 2026. Builds the infrastructure in `../specs/` and nothing else: no product, no merchant integration, no app. Where this plan and a spec disagree, the spec wins.
 
-**Progress:** Phases 1 to 9 done (published 16 Oct 2026 as `v0.1.0`), with a synthetic-workload harness (`make simulate`) that each later phase extends. **Next action:** the open items before real deployment listed in the README status.
+**Progress:** Phases 1 to 9 done (published 16 Oct 2026 as `v0.1.0`; open core from `v0.2.0`, see `../LICENSING.md`), with a synthetic-workload harness (`make simulate`) that each later phase extends. **Next action:** the open items before real deployment listed in the README status.
 
 ---
 
@@ -29,7 +29,8 @@ governed-agent-payments/
 │   ├── adapters/    merchant adapter interface, fake-a, fake-b; rail profiles
 │   ├── recon/       source adapters, sweeps, findings
 │   ├── identity/    enrolment, challenges, assertions, callers, recovery
-│   ├── evidence/    bundle builder + open verifier (standalone)
+│   ├── evidence/    bundle builder, disclosure, renderings
+│   ├── verify/      open verifier (standalone; depends on core only; Apache-2.0)
 │   ├── api/         HTTP API
 │   └── mcp/         governance MCP server
 ├── mappings/in/v0.1.0.yaml   mappings/uk/v0.1.0.yaml

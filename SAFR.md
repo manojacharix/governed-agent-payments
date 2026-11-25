@@ -6,7 +6,7 @@ SAFR states that it "does not constitute regulatory guidance or supervisory expe
 
 Scope differs. SAFR covers any consequential agent action in financial services (payments, trading, credit, claims, filings). This layer covers **merchant commerce only**: an agent paying a merchant for an order (`specs/README.md`, "Scope").
 
-Status: `v0.1.0`, not in production. Every merchant is a test fake and no real money moves (see the README).
+Status: `v0.2.0`, not in production. Every merchant is a test fake and no real money moves (see the README).
 
 ---
 

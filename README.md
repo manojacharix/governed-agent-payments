@@ -4,7 +4,7 @@ When software spends a person's money at a merchant, record what they authorised
 
 This repository is **the infrastructure layer only**. It contains no product, no merchant integration and no app. Products built on the layer live in their own repositories.
 
-**Status (28 Oct 2026):** `v0.1.0`, public and source available under PolyForm Noncommercial 1.0.0 (see [License](#license)). Scope: merchant commerce (an agent paying a merchant for an order). All nine build-plan phases are done: primitives and the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier; identity (challenge-bound approvals, enrolled agents with proofs, recovery and compromise handling); the HTTP API and the governance MCP server over one host service; readable evidence pages and `make demo`. A stress campaign followed (extreme inputs at every entry point, the full flow under ten extreme profiles, zero invariant violations); the method is in [`STRESS_TESTING.md`](STRESS_TESTING.md) and what it found and fixed is in `plan/stress_campaign.md`. An audit on 14 Oct 2026 found eight loopholes; all are closed, each with a regression test. 614 tests, 221 of them also run on Postgres working state. **Not in production:** every merchant here is a test fake, no real money moves, and the India mapping is an interpretation, not regulatory approval. Open before any real deployment: a purge job for expired state, hosting, multi-machine and failover testing, code-list licences, and a legal review of retention. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
+**Status (25 Nov 2026):** `v0.2.0`, public and **open core**: the specification, the core with the evaluator, and the open verifier are Apache-2.0; the rest is source available under PolyForm Noncommercial 1.0.0 (see [License](#license)). Scope: merchant commerce (an agent paying a merchant for an order). All nine build-plan phases are done: primitives and the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier; identity (challenge-bound approvals, enrolled agents with proofs, recovery and compromise handling); the HTTP API and the governance MCP server over one host service; readable evidence pages and `make demo`. A stress campaign followed (extreme inputs at every entry point, the full flow under ten extreme profiles, zero invariant violations); the method is in [`STRESS_TESTING.md`](STRESS_TESTING.md) and what it found and fixed is in `plan/stress_campaign.md`. An audit on 14 Oct 2026 found eight loopholes; all are closed, each with a regression test. 616 tests, 221 of them also run on Postgres working state. **Not in production:** every merchant here is a test fake, no real money moves, and the India mapping is an interpretation, not regulatory approval. Open before any real deployment: a purge job for expired state, hosting, multi-machine and failover testing, code-list licences, and a legal review of retention. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
 
 ---
 
@@ -19,7 +19,10 @@ governed-agent-payments/
 │   └── policy_parameters.md   every configurable value (no defaults baked in)
 ├── plan/             build_plan.md: phases 1 to 9, infrastructure only
 ├── jurisdictions/    layer 3: country law, rails and schemes, read as mapping data (India, UK)
-└── research/         18 silence and approval rules (India), 21 NPCI UAP, 23 AP2 / ACP / UK consent review
+├── research/         18 silence and approval rules (India), 21 NPCI UAP, 23 AP2 / ACP / UK consent review
+├── LICENSING.md      which paths are Apache-2.0 and which are PolyForm Noncommercial
+├── CONTRIBUTING.md   pull requests (Apache folders, DCO sign-off) and issues (everything else)
+└── SAFR.md           how the layer maps to MAS's SAFR white paper
 ```
 
 Document numbers are permanent identifiers: "`07`" means `specs/07_identity_and_keys.md` wherever it is cited.
@@ -29,6 +32,7 @@ Document numbers are permanent identifiers: "`07`" means `specs/07_identity_and_
 1. `specs/README.md`, then `01` to `07`, then `policy_parameters.md`.
 2. `jurisdictions/india.md`.
 3. `research/` as needed.
+4. `SAFR.md` if you know MAS's *Safeguards for Agentic Finance at Runtime* and want the same ideas in this layer's terms.
 
 ## Rules for this repository
 

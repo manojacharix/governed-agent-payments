@@ -24,6 +24,6 @@ You may read, run and modify it for personal use, research, study and other nonc
 
 ## History
 
-Up to and including `v0.1.0`, the whole repository was under PolyForm Noncommercial 1.0.0. The Apache-2.0 grant above applies from the commit that added this file onward; earlier copies keep the license they were published under.
+Up to and including `v0.1.0`, the whole repository was under PolyForm Noncommercial 1.0.0. The Apache-2.0 grant above applies from `v0.2.0`, the release that added this file, onward; earlier copies keep the license they were published under.
 
 Copyright 2026 Manoj Achari.
