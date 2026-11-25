@@ -3,6 +3,7 @@ name = "gap-state"
 version = "0.1.0"
 description = "Durable working state (proposals, challenges, tokens, callers, recoveries) in Postgres, with units of work"
 requires-python = ">=3.12"
+license = "PolyForm-Noncommercial-1.0.0"
 dependencies = ["gap-core", "psycopg[binary]>=3.2"]
 
 [tool.uv.sources]

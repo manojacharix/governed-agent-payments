@@ -7,7 +7,7 @@ from pathlib import Path
 import psycopg
 
 from gap_evidence.bundle import EvidenceBuilder, evaluator_digest
-from gap_evidence.verify import verify_bundle
+from gap_verify import verify_bundle
 from gap_flow.testing import LINES, make_world
 from gap_ledger.ledger import Ledger
 from gap_ledger.pgtemp import LEDGER_SQL, TempCluster

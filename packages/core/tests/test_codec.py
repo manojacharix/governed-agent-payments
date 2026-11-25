@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The codec round-trips every evaluation input exactly, so stored decisions can be replayed byte for byte."""
 
 from dataclasses import replace

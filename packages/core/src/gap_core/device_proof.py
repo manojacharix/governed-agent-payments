@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """What a payer's device signs, and how anyone checks it (07 §3). Shared by the host, which checks an assertion once
 when it arrives, and the open evidence verifier, which checks it again later from the ledger alone: the record keeps
 the challenge and the device's proof, so payer consent never rests on the host's word."""

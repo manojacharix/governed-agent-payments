@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Typed IDs: prefix + "_" + 26-character lowercase ULID (19 §1.2).
 
 The clock and the random source are passed in, so the core never reads either itself.

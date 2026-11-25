@@ -3,6 +3,7 @@ name = "gap-sim"
 version = "0.1.0"
 description = "Seeded synthetic workloads: run the whole stack on many payers and months, then check invariants"
 requires-python = ">=3.12"
+license = "PolyForm-Noncommercial-1.0.0"
 dependencies = ["gap-core", "gap-keys", "gap-mapping", "gap-ledger", "gap-adapters", "gap-flow", "gap-evidence", "gap-profile", "gap-recon"]
 
 [tool.uv.sources]

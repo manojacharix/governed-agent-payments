@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A lossless JSON codec for core types, so a decision's exact inputs can be stored and replayed (06 §1).
 
 encode() turns dataclasses, tuples, sets, maps, datetimes and None into a canonicalisable tree of

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Canonical bytes (19 §1.3): RFC 8785 (JCS) over a restricted JSON model.
 
 Allowed values: dict with str keys, list, str (NFC-normalised), bool, int within ±(2^53 - 1).

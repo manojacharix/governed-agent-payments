@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Time is injected, never read (invariant 8). Real clocks live outside the core."""
 
 from __future__ import annotations

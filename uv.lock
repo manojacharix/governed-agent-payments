@@ -21,6 +21,7 @@ members = [
     "gap-recon",
     "gap-sim",
     "gap-state",
+    "gap-verify",
     "governed-agent-payments",
 ]
 
@@ -376,6 +377,7 @@ dependencies = [
     { name = "gap-core" },
     { name = "gap-ledger" },
     { name = "gap-profile" },
+    { name = "gap-verify" },
 ]
 
 [package.metadata]
@@ -383,6 +385,7 @@ requires-dist = [
     { name = "gap-core", editable = "packages/core" },
     { name = "gap-ledger", editable = "packages/ledger" },
     { name = "gap-profile", editable = "packages/profile" },
+    { name = "gap-verify", editable = "packages/verify" },
 ]
 
 [[package]]
@@ -563,6 +566,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "gap-verify"
+version = "0.1.0"
+source = { editable = "packages/verify" }
+dependencies = [
+    { name = "gap-core" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "gap-core", editable = "packages/core" }]
+
+[[package]]
 name = "governed-agent-payments"
 version = "0.0.0"
 source = { virtual = "." }
@@ -582,6 +596,7 @@ dev = [
     { name = "gap-recon" },
     { name = "gap-sim" },
     { name = "gap-state" },
+    { name = "gap-verify" },
     { name = "hypothesis" },
     { name = "pytest" },
 ]
@@ -603,6 +618,7 @@ dev = [
     { name = "gap-recon", editable = "packages/recon" },
     { name = "gap-sim", editable = "packages/sim" },
     { name = "gap-state", editable = "packages/state" },
+    { name = "gap-verify", editable = "packages/verify" },
     { name = "hypothesis", specifier = ">=6" },
     { name = "pytest", specifier = ">=8" },
 ]

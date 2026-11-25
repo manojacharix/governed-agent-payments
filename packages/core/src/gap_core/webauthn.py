@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Minimal WebAuthn assertion verification (for recovery keys and passkey surfaces), plus a software
 authenticator for tests. Checks: ceremony type, challenge, origin, relying-party id hash, user presence,
 and the signature over authenticatorData || SHA-256(clientDataJSON). Reports whether the user was verified.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Authority types (01, 19 §3): windows, rules and their 14 dimensions, spokes, wheels, rails, parameters."""
 
 from __future__ import annotations

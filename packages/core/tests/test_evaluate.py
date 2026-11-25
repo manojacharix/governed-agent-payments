@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Phase 2 acceptance tests: 01 §9 and 02 §6, plus each of the 14 dimensions."""
 
 from dataclasses import replace

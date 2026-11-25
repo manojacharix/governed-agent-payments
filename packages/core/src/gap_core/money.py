@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Money as integer minor units plus an ISO 4217 code (19 §1.2). No floats, no currency mixing."""
 
 from __future__ import annotations

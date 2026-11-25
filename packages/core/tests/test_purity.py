@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Architecture test: gap_core does no I/O and never reads the clock (build plan §1)."""
 
 import ast

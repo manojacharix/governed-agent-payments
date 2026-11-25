@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """A ready-made scenario for tests and demos: one payer, one hub budget, a grocery spoke, two rails.
 
 Example values only (currency XTS, the ISO 4217 testing code). Override anything with keyword

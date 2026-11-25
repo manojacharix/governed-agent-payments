@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Facts and predicates (02 §4, 07 §6, 19 §3.3, §5).
 
 Facts are frozen before evaluation. Unverified facts may only add caution: they can block, force a

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ES256 signature verification (19 §1.4): P-256, SHA-256, 64-byte r‖s, base64url, low-s only.
 
 Only public keys appear here; signing lives in gap_keys.
