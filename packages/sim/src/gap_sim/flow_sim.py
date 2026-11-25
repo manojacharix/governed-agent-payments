@@ -26,7 +26,7 @@ from gap_core.money import Money
 from gap_core.proposal import CartLine, Fee
 from gap_core.testing import rule
 from gap_evidence.bundle import EvidenceBuilder, evaluator_digest
-from gap_evidence.verify import verify_bundle
+from gap_verify import verify_bundle
 from gap_flow.flow import Deployment, Flow, FlowError, ProposalRequest, Rejected, request_digest
 from gap_identity.devices import Device, KeyAgent, bearer_proof
 from gap_identity.identity import Identity, IdentityError

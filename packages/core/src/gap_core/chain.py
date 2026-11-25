@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Signed, hash-chained records (19 §1.4, §1.5, §10.1).
 
 A record is a JSON object. append() adds its chain link and signature; verify_chain() checks

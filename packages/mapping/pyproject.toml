@@ -3,6 +3,7 @@ name = "gap-mapping"
 version = "0.1.0"
 description = "Loads jurisdiction mappings and Tier 0 configs (data, not code) into core types"
 requires-python = ">=3.12"
+license = "PolyForm-Noncommercial-1.0.0"
 dependencies = ["gap-core", "pyyaml>=6"]
 
 [tool.uv.sources]

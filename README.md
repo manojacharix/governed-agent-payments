@@ -4,7 +4,7 @@ When software spends a person's money at a merchant, record what they authorised
 
 This repository is **the infrastructure layer only**. It contains no product, no merchant integration and no app. Products built on the layer live in their own repositories.
 
-**Status (28 Oct 2026):** `v0.1.0`, public and source available under PolyForm Noncommercial 1.0.0 (see [License](#license)). Scope: merchant commerce (an agent paying a merchant for an order). All nine build-plan phases are done: primitives and the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier; identity (challenge-bound approvals, enrolled agents with proofs, recovery and compromise handling); the HTTP API and the governance MCP server over one host service; readable evidence pages and `make demo`. A stress campaign followed (extreme inputs at every entry point, the full flow under ten extreme profiles, zero invariant violations); the method is in [`STRESS_TESTING.md`](STRESS_TESTING.md) and what it found and fixed is in `plan/stress_campaign.md`. An audit on 14 Oct 2026 found eight loopholes; all are closed, each with a regression test. 614 tests, 221 of them also run on Postgres working state. **Not in production:** every merchant here is a test fake, no real money moves, and the India mapping is an interpretation, not regulatory approval. Open before any real deployment: a purge job for expired state, hosting, multi-machine and failover testing, code-list licences, and a legal review of retention. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
+**Status (25 Nov 2026):** `v0.2.0`, public and **open core**: the specification, the core with the evaluator, and the open verifier are Apache-2.0; the rest is source available under PolyForm Noncommercial 1.0.0 (see [License](#license)). Scope: merchant commerce (an agent paying a merchant for an order). All nine build-plan phases are done: primitives and the evaluator; jurisdiction mappings and Tier 0 configs; the Postgres ledger, money in flight, key log and profile store; merchant adapters and safe execution; the proposal flow, reconciliation and evidence with an open verifier; identity (challenge-bound approvals, enrolled agents with proofs, recovery and compromise handling); the HTTP API and the governance MCP server over one host service; readable evidence pages and `make demo`. A stress campaign followed (extreme inputs at every entry point, the full flow under ten extreme profiles, zero invariant violations); the method is in [`STRESS_TESTING.md`](STRESS_TESTING.md) and what it found and fixed is in `plan/stress_campaign.md`. An audit on 14 Oct 2026 found eight loopholes; all are closed, each with a regression test. 616 tests, 221 of them also run on Postgres working state. **Not in production:** every merchant here is a test fake, no real money moves, and the India mapping is an interpretation, not regulatory approval. Open before any real deployment: a purge job for expired state, hosting, multi-machine and failover testing, code-list licences, and a legal review of retention. Build plan: `plan/build_plan.md`; model spec: `specs/19_model_spec.md`.
 
 ---
 
@@ -19,7 +19,10 @@ governed-agent-payments/
 │   └── policy_parameters.md   every configurable value (no defaults baked in)
 ├── plan/             build_plan.md: phases 1 to 9, infrastructure only
 ├── jurisdictions/    layer 3: country law, rails and schemes, read as mapping data (India, UK)
-└── research/         18 silence and approval rules (India), 21 NPCI UAP, 23 AP2 / ACP / UK consent review
+├── research/         18 silence and approval rules (India), 21 NPCI UAP, 23 AP2 / ACP / UK consent review
+├── LICENSING.md      which paths are Apache-2.0 and which are PolyForm Noncommercial
+├── CONTRIBUTING.md   pull requests (Apache folders, DCO sign-off) and issues (everything else)
+└── SAFR.md           how the layer maps to MAS's SAFR white paper
 ```
 
 Document numbers are permanent identifiers: "`07`" means `specs/07_identity_and_keys.md` wherever it is cited.
@@ -29,6 +32,7 @@ Document numbers are permanent identifiers: "`07`" means `specs/07_identity_and_
 1. `specs/README.md`, then `01` to `07`, then `policy_parameters.md`.
 2. `jurisdictions/india.md`.
 3. `research/` as needed.
+4. `SAFR.md` if you know MAS's *Safeguards for Agentic Finance at Runtime* and want the same ideas in this layer's terms.
 
 ## Rules for this repository
 
@@ -60,14 +64,15 @@ make simulate      # synthetic run of the full flow: 40 payers, 3,000 proposals 
 
 | Package | Contents |
 |---|---|
-| `packages/core` (`gap_core`) | Pure: Money, canonical JSON (RFC 8785), hashing, IDs, timestamps, injected clock, ES256 verification, hash chains, and `evaluate()` with the 14 rule dimensions. No I/O, no clock reads (enforced by `test_purity.py`) |
+| `packages/core` (`gap_core`) | **Apache-2.0.** Pure: Money, canonical JSON (RFC 8785), hashing, IDs, timestamps, injected clock, ES256 verification, hash chains, and `evaluate()` with the 14 rule dimensions. No I/O, no clock reads (enforced by `test_purity.py`) |
 | `packages/keys` (`gap_keys`) | Signers: a local software signer for development and tests |
 | `packages/ledger` (`gap_ledger`) | Postgres ledger with database-enforced chains, money in flight (holds, captures, releases, overcaptures, refunds), key log, `verify_integrity()` |
 | `packages/profile` (`gap_profile`) | Postgres profile store: personal data under per-payer AES-256-GCM keys, salted commitments, retention holds, shredding |
 | `packages/adapters` (`gap_adapters`) | Merchant adapter interface, two fake merchants of different shapes (contract-tested), and the executor: guards, prove-before-retry, signed execution attempts |
 | `packages/recon` (`gap_recon`) | Reconciliation sweeps: settle on consistent evidence, all nine finding kinds, bank feed, refunds, payer acceptance |
 | `packages/flow` (`gap_flow`) | The proposal flow: proven callers, host-captured carts, stored replayable inputs, challenge-bound approve / override / decline, expiry, silent repeats after notice, stage 2, hold, execute, reconcile |
-| `packages/evidence` (`gap_evidence`) | Evidence bundles with role-scoped disclosure and divergence, release log, and the open verifier |
+| `packages/evidence` (`gap_evidence`) | Evidence bundles with role-scoped disclosure and divergence, release log, readable renderings |
+| `packages/verify` (`gap_verify`) | The open verifier (`06` §1): signatures, chains, key log, attestations, and the decision reproduced from disclosed facts. Depends on `gap_core` only. **Apache-2.0** |
 | `packages/identity` (`gap_identity`) | Challenges, surface assertions (ES256 or WebAuthn) with strength from the jurisdiction's scale, approval-gated enrolment, OAuth 2.1 + PKCE and signed proofs for agents, replay protection, recovery questions, recovery, compromise and suspension |
 | `packages/api` (`gap_api`) | One host service; the HTTP API (FastAPI) and the governance MCP server (MCP 2.x) over it. Agents propose, read their own proposals and spokes, request changes and hand off; only the payer's device approves |
 | `packages/state` (`gap_state`) | Working state (pending proposals, challenges, tokens, callers, recoveries) in memory or in Postgres, with units of work under per-payer locks, so several host processes can share state and any can restart |
@@ -84,6 +89,14 @@ Vocabulary terms such as `std:mcc:7995` are referenced by code only. The ISO 182
 
 ## License
 
-Source available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may read, run and modify the code for personal use, research, study and other noncommercial purposes.
+**Open core.** The parts a merchant, payment provider, bank or auditor has to trust are open source under the [Apache License 2.0](packages/core/LICENSE); the rest is source available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). [`LICENSING.md`](LICENSING.md) lists every path.
 
-Commercial use needs written permission. If you want to use this in a product or inside a company, get in touch through [manojachari.com](https://www.manojachari.com) to agree a commercial license.
+| Apache-2.0 (open source, commercial use allowed) | PolyForm Noncommercial 1.0.0 (source available) |
+|---|---|
+| `specs/` (the infrastructure specification) | `packages/ledger`, `profile`, `state`, `flow`, `identity`, `api`, `adapters`, `recon`, `keys`, `mapping`, `sim`, `evidence` |
+| `packages/core` (`gap_core`: types, canonical form, hashing, signatures, chains, `evaluate()`) | `jurisdictions/`, `mappings/`, `tier0/`, `research/`, `plan/`, `tools/` |
+| `packages/verify` (`gap_verify`: the open verifier) | everything else not listed on the left |
+
+Anyone can check an evidence bundle, reproduce a decision or implement the specification in a commercial product. Running the full layer (ledger, flow, identity, API) inside a company needs a commercial license: get in touch through [manojachari.com](https://www.manojachari.com).
+
+The Apache-2.0 packages import nothing from the noncommercial ones; `packages/verify/tests/test_license_boundary.py` enforces it.

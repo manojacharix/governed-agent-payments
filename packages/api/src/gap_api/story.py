@@ -20,7 +20,7 @@ from mcp import Client
 
 from gap_evidence.bundle import EvidenceBuilder, evaluator_digest
 from gap_evidence.render import render_html, render_text
-from gap_evidence.verify import verify_bundle
+from gap_verify import verify_bundle
 from gap_flow.testing import LINES, make_world
 from gap_identity.devices import bearer_proof
 

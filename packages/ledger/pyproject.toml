@@ -3,6 +3,7 @@ name = "gap-ledger"
 version = "0.1.0"
 description = "Postgres ledger: chained records, postings, key log, verify_integrity()"
 requires-python = ">=3.12"
+license = "PolyForm-Noncommercial-1.0.0"
 dependencies = ["gap-core", "psycopg[binary]>=3.2", "cryptography>=43"]
 
 [tool.uv.sources]

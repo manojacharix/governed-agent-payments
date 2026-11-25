@@ -6,7 +6,7 @@ import random
 import pytest
 
 from gap_evidence.bundle import EvidenceBuilder, classify, evaluator_digest
-from gap_evidence.verify import verify_bundle
+from gap_verify import verify_bundle
 from gap_flow.testing import LINES, make_world
 from gap_core.proposal import CartLine
 from gap_flow.testing import inr

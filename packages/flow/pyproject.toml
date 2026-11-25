@@ -3,6 +3,7 @@ name = "gap-flow"
 version = "0.1.0"
 description = "gap flow"
 requires-python = ">=3.12"
+license = "PolyForm-Noncommercial-1.0.0"
 dependencies = ["gap-state", "gap-core", "gap-keys", "gap-ledger", "gap-adapters", "gap-recon", "gap-profile", "gap-identity"]
 
 [tool.uv.sources]

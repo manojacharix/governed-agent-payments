@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """hash(x) = "sha256:" + hex(SHA-256(canonical(x)))  (19 §1.3)."""
 
 import hashlib

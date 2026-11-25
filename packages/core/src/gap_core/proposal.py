@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Proposals (02, 19 §4) and the hashes that bind them: proposal, cart and presented hashes."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Property tests: the guarantees of 01 §9 and 02 §6 hold for any combination of rules and facts."""
 
 from dataclasses import replace

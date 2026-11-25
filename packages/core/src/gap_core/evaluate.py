@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """evaluate(): one proposal, frozen inputs, one decision (02 Stage 1 and Stage 2).
 
 Pure. Everything it needs arrives in EvaluationInput: authority versions, frozen facts, usage

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Salted commitments (07 §8, 19 §11): the ledger's stand-in for personal data.
 
 commitment = "sha256:" + hex(SHA-256(salt ‖ canonical(value))), with a 32-byte random salt kept,

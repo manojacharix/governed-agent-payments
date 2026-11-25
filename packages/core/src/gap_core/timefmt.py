@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Timestamps: RFC 3339, UTC, exactly millisecond precision, Z suffix (19 §1.2)."""
 
 from datetime import datetime, timezone
